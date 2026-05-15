@@ -180,7 +180,8 @@ function CookInner({ profile }: { profile: UserProfile }) {
             rows={3}
             className="input-base resize-y min-h-[100px] relative z-10"
             onKeyDown={(e) => {
-              if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) {
+              if (e.key === "Enter" && !e.shiftKey) {
+                e.preventDefault();
                 void handleSubmit();
               }
             }}
@@ -188,13 +189,9 @@ function CookInner({ profile }: { profile: UserProfile }) {
           <div className="flex flex-col-reverse sm:flex-row sm:items-center sm:justify-between gap-3 mt-4 relative z-10">
             <span className="font-body text-xs text-muted">
               <kbd className="font-display px-1.5 py-0.5 rounded bg-soft text-ink text-[10px]">
-                ⌘
-              </kbd>{" "}
-              +{" "}
-              <kbd className="font-display px-1.5 py-0.5 rounded bg-soft text-ink text-[10px]">
                 Enter
               </kbd>{" "}
-              to send
+              to send · <kbd className="font-display px-1.5 py-0.5 rounded bg-soft text-ink text-[10px]">Shift</kbd> + <kbd className="font-display px-1.5 py-0.5 rounded bg-soft text-ink text-[10px]">Enter</kbd> for new line
             </span>
             <button
               type="submit"
@@ -220,7 +217,7 @@ function CookInner({ profile }: { profile: UserProfile }) {
         {/* Results area */}
         <div ref={resultsRef} className="mt-10 md:mt-14">
           <AnimatePresence mode="wait">
-            {stage === "chat" && (
+            {stage === "chat" && loadingMode === "none" && (
               <motion.div
                 key="welcome"
                 initial={{ opacity: 0, y: 12 }}

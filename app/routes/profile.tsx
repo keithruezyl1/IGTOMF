@@ -8,7 +8,7 @@ import { MustafoBubble } from "~/components/MustafoBubble";
 import { NavBar } from "~/components/NavBar";
 import { StarRating } from "~/components/StarRating";
 import { ToastProvider, useToast } from "~/components/Toast";
-import { EXPRESSIONS, TALKING } from "~/lib/mustafo";
+import { EXPRESSIONS } from "~/lib/mustafo";
 import {
   clearAll,
   getDishes,
@@ -114,23 +114,16 @@ function ProfileInner({
                 )}
               </div>
             </div>
-            <img
-              src={TALKING[1]}
-              alt="Mustafo"
-              className="hidden md:block w-28 h-28 object-contain drop-shadow-[0_8px_24px_rgba(0,0,0,0.12)]"
-            />
           </div>
         </section>
 
         {/* Dishes grid or empty state */}
         {dishes.length === 0 ? (
           <section className="card-base p-8 md:p-12 text-center">
-            <motion.img
+            <img
               src={EXPRESSIONS[1]}
               alt="Mustafo curious"
               className="w-32 h-32 md:w-40 md:h-40 mx-auto mb-4 drop-shadow-[0_8px_24px_rgba(0,0,0,0.12)]"
-              animate={{ y: [0, -8, 0] }}
-              transition={{ repeat: Infinity, duration: 2.5, ease: "easeInOut" }}
             />
             <h2 className="font-display font-bold text-2xl md:text-3xl text-ink mb-2">
               No dishes yet, but you're about to change that!
@@ -167,10 +160,24 @@ function ProfileInner({
           </section>
         )}
 
-        {/* Mustafo motivator */}
-        <div className="mt-12 flex justify-center">
+        {/* Danger zone */}
+        <section className="mt-14 text-center">
+          <button
+            type="button"
+            onClick={() => setConfirmDelete(true)}
+            className="font-display font-semibold text-sm text-muted hover:text-coral transition-colors underline-offset-4 hover:underline"
+          >
+            Delete account & start fresh
+          </button>
+        </section>
+      </main>
+
+      {/* Floating Mustafo motivator */}
+      <div className="hidden md:block fixed bottom-6 right-6 z-40 pointer-events-none">
+        <div className="pointer-events-auto">
           <MustafoBubble
             align="right"
+            size="sm"
             messages={
               dishes.length === 0
                 ? [
@@ -185,18 +192,7 @@ function ProfileInner({
             }
           />
         </div>
-
-        {/* Danger zone */}
-        <section className="mt-14 text-center">
-          <button
-            type="button"
-            onClick={() => setConfirmDelete(true)}
-            className="font-display font-semibold text-sm text-muted hover:text-coral transition-colors underline-offset-4 hover:underline"
-          >
-            Delete account & start fresh
-          </button>
-        </section>
-      </main>
+      </div>
 
       {/* Recipe detail modal */}
       <Modal
