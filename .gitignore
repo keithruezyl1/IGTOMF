@@ -1,0 +1,16 @@
+node_modules
+.cache
+.env
+.env.example
+.env.local
+.env.production.local
+build
+.vercel
+.DS_Store
+*.log
+
+# local Claude / agent caches
+.agents/
+.claude/
+skills-lock.json
+memory/
