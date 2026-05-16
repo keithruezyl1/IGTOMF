@@ -80,7 +80,7 @@ export default function Onboarding() {
                 Hey! I'm Mustafo.
               </h1>
               <p className="font-body text-sm md:text-base text-muted leading-relaxed mb-6">
-                I'm your personal AI chef who works with what you've actually got.
+                I'm your personal AI chef who works with what you've actually got, like random stuff in your fridge.
                 What should I call you?
               </p>
 

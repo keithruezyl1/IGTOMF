@@ -7,10 +7,17 @@ import type { MealSuggestion } from "~/types";
 
 const PROMPT = (ingredients: string) => `A user wrote: "${ingredients}"
 
-Pick out the usable ingredients (skip ones that sound spoiled, expired, or unsafe — joke about them briefly). Then suggest 3 meal ideas they can realistically make.
+STEP 1 — Validate. Is there at least ONE real edible food ingredient in there? Pantry staples, proteins, produce, dairy, grains, condiments, even snacks — all count as food. Spoiled/expired food still counts (we'll just joke about it). NON-food includes: electronics, furniture, tools, office supplies, toys, animals (pets), drugs, soap, random objects. Mixed input (e.g. "chicken and a keyboard") still has food — we work with the chicken.
 
-Return STRICT JSON in this exact shape — no markdown, no commentary:
+STEP 2 — Respond in STRICT JSON, no markdown, no commentary.
 
+IF the input has zero real food ingredients, respond with:
+{
+  "noFood": true,
+  "message": "1-2 sentences in Mustafo's voice gently roasting the user for trying to cook with non-food. Mention the specific weird items. Be playful, not mean. End by asking them to try again with actual food."
+}
+
+OTHERWISE, suggest 3 meals using only the food ingredients (ignore the non-food stuff):
 {
   "suggestions": [
     {
@@ -22,7 +29,7 @@ Return STRICT JSON in this exact shape — no markdown, no commentary:
   ]
 }
 
-Exactly 3 suggestions. Different cuisines / styles when possible.`;
+Exactly 3 suggestions when responding with suggestions. Different cuisines / styles when possible.`;
 
 export async function action({ request }: ActionFunctionArgs) {
   if (request.method !== "POST") {
@@ -52,7 +59,20 @@ export async function action({ request }: ActionFunctionArgs) {
     const raw = completion.choices[0]?.message?.content ?? "{}";
     const parsed = JSON.parse(raw) as {
       suggestions?: Array<Omit<MealSuggestion, "imageUrl" | "description">>;
+      noFood?: boolean;
+      message?: string;
     };
+
+    if (parsed.noFood) {
+      return json(
+        {
+          error:
+            parsed.message ??
+            "I'm a chef, not a magician. Try giving me actual food this time?",
+        },
+        { status: 400 },
+      );
+    }
 
     const suggestions = (parsed.suggestions ?? []).slice(0, 3).map((s) => ({
       name: String(s.name ?? "Mystery Meal"),

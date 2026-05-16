@@ -126,11 +126,12 @@ function CookInner({ profile }: { profile: UserProfile }) {
   }
 
   function tryElse() {
-    setIngredients(submittedIngredients);
-    setStage("chat");
     setRecipe(null);
     setSelectedMeal(null);
-    window.scrollTo({ top: 0, behavior: "smooth" });
+    setStage("suggestions");
+    setTimeout(() => {
+      resultsRef.current?.scrollIntoView({ behavior: "smooth", block: "start" });
+    }, 80);
   }
 
   return (
