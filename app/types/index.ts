@@ -1,6 +1,5 @@
 export type UserProfile = {
   username: string;
-  profileImage: string | null;
   createdAt: string;
 };
 
