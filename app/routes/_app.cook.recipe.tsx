@@ -45,7 +45,6 @@ type RecipeJob = {
   ingredients: string;
   imageUrl: string;
   index: number;
-  cached: CachedRecipe | null;
 };
 
 export async function action({ request }: ActionFunctionArgs) {
@@ -70,11 +69,6 @@ export async function action({ request }: ActionFunctionArgs) {
   const encoded = session.get("cookState") as string | undefined;
   const state = encoded ? decodeCookState(encoded) : null;
 
-  const cached =
-    state && Number.isInteger(index) && index >= 0
-      ? state.recipes[String(index)] ?? null
-      : null;
-
   if (
     state &&
     Number.isInteger(index) &&
@@ -90,7 +84,10 @@ export async function action({ request }: ActionFunctionArgs) {
     );
   }
 
-  const job: RecipeJob = { dishName, ingredients, imageUrl, index, cached };
+  // Flash only the small request payload. The loader resolves the cache hit
+  // from cookState directly so we don't duplicate the recipe in the cookie
+  // (which can overflow the 4KB browser limit).
+  const job: RecipeJob = { dishName, ingredients, imageUrl, index };
   session.flash("recipeJob", job);
   const cookie = await storage.commitSession(session);
   return redirect("/cook/recipe", {
@@ -139,8 +136,16 @@ export async function loader({ request }: LoaderFunctionArgs) {
   );
   if (!job) throw redirect("/");
 
-  if (job.cached) {
-    const cached = job.cached;
+  // Resolve cache from cookState (the flash itself doesn't carry the recipe).
+  const session = await getSession(request);
+  const encoded = session.get("cookState") as string | undefined;
+  const state = encoded ? decodeCookState(encoded) : null;
+  const cached =
+    state && Number.isInteger(job.index) && job.index >= 0
+      ? state.recipes[String(job.index)] ?? null
+      : null;
+
+  if (cached) {
     return defer(
       {
         job,
