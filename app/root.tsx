@@ -22,7 +22,8 @@ export const links: LinksFunction = () => [
     href: "https://fonts.gstatic.com",
     crossOrigin: "anonymous",
   },
-  { rel: "icon", href: "/favicon.svg", type: "image/svg+xml" },
+  { rel: "icon", href: "/favicon.svg?v=2", type: "image/svg+xml" },
+  { rel: "apple-touch-icon", href: "/favicon.svg?v=2" },
 ];
 
 export const meta: MetaFunction = () => [
