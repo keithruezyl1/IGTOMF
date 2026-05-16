@@ -40,6 +40,7 @@ type RecipeJob = {
   ingredients: string;
   imageUrl: string;
   index: number;
+  generationId: string;
 };
 
 type CachedEntry = {
@@ -49,16 +50,19 @@ type CachedEntry = {
   steps: RecipeSteps;
 };
 
-const SESSION_CACHE_PREFIX = "recipe_cache_";
-
-function sessionCacheKey(index: number): string {
-  return `${SESSION_CACHE_PREFIX}${index}`;
+function sessionCacheKey(generationId: string, index: number): string {
+  return `recipe_cache_${generationId}_${index}`;
 }
 
-function readRecipeCache(index: number): CachedEntry | null {
-  if (typeof window === "undefined") return null;
+function readRecipeCache(
+  generationId: string,
+  index: number,
+): CachedEntry | null {
+  if (typeof window === "undefined" || !generationId) return null;
   try {
-    const raw = window.sessionStorage.getItem(sessionCacheKey(index));
+    const raw = window.sessionStorage.getItem(
+      sessionCacheKey(generationId, index),
+    );
     if (!raw) return null;
     return JSON.parse(raw) as CachedEntry;
   } catch {
@@ -66,11 +70,15 @@ function readRecipeCache(index: number): CachedEntry | null {
   }
 }
 
-function writeRecipeCache(index: number, entry: CachedEntry) {
-  if (typeof window === "undefined") return;
+function writeRecipeCache(
+  generationId: string,
+  index: number,
+  entry: CachedEntry,
+) {
+  if (typeof window === "undefined" || !generationId) return;
   try {
     window.sessionStorage.setItem(
-      sessionCacheKey(index),
+      sessionCacheKey(generationId, index),
       JSON.stringify(entry),
     );
   } catch {
@@ -85,6 +93,7 @@ export async function action({ request }: ActionFunctionArgs) {
   const imageUrl = String(form.get("imageUrl") ?? "");
   const indexRaw = form.get("index");
   const index = indexRaw !== null ? Number(indexRaw) : -1;
+  const generationId = String(form.get("generationId") ?? "");
   if (!dishName || !ingredients) {
     return redirect("/");
   }
@@ -94,14 +103,21 @@ export async function action({ request }: ActionFunctionArgs) {
   // can't tip the cookie over the 4KB limit.
   const session = await getSession(request);
 
-  const job: RecipeJob = { dishName, ingredients, imageUrl, index };
+  const job: RecipeJob = {
+    dishName,
+    ingredients,
+    imageUrl,
+    index,
+    generationId,
+  };
   session.flash("recipeJob", job);
   const cookie = await commitSessionSafely(session);
-  // Put the index in the URL so clientLoader can short-circuit to sessionStorage.
-  const target =
-    Number.isInteger(index) && index >= 0
-      ? `/cook/recipe?i=${index}`
-      : "/cook/recipe";
+  // Put index + generationId in the URL so clientLoader can short-circuit to
+  // sessionStorage with the correct key for this submission batch.
+  const params = new URLSearchParams();
+  if (Number.isInteger(index) && index >= 0) params.set("i", String(index));
+  if (generationId) params.set("g", generationId);
+  const target = `/cook/recipe${params.size ? `?${params}` : ""}`;
   return redirect(
     target,
     cookie ? { headers: { "Set-Cookie": cookie } } : undefined,
@@ -169,9 +185,10 @@ export async function clientLoader({
   const url = new URL(request.url);
   const idxStr = url.searchParams.get("i");
   const idx = idxStr !== null ? Number(idxStr) : -1;
+  const generationId = url.searchParams.get("g") ?? "";
 
-  if (Number.isInteger(idx) && idx >= 0) {
-    const cached = readRecipeCache(idx);
+  if (Number.isInteger(idx) && idx >= 0 && generationId) {
+    const cached = readRecipeCache(generationId, idx);
     if (cached) {
       return {
         job: cached.job,
@@ -338,9 +355,9 @@ function RecipeFooter(props: {
   // suggestion in this tab skips regeneration. Idempotent for cache hits.
   useEffect(() => {
     if (cacheWritten.current) return;
-    if (props.job.index < 0) return;
+    if (props.job.index < 0 || !props.job.generationId) return;
     cacheWritten.current = true;
-    writeRecipeCache(props.job.index, {
+    writeRecipeCache(props.job.generationId, props.job.index, {
       job: props.job,
       title: props.title,
       ingredients: props.ingredients,

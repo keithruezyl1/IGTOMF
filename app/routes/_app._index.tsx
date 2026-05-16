@@ -67,6 +67,7 @@ export async function loader({ request }: LoaderFunctionArgs) {
   return json({
     suggestions: state?.suggestions ?? null,
     submittedIngredients: state?.submittedIngredients ?? "",
+    generationId: state?.generationId ?? "",
     copy,
   });
 }
@@ -90,6 +91,7 @@ export async function action({ request }: ActionFunctionArgs) {
     encodeCookState({
       suggestions: result.suggestions,
       submittedIngredients: ingredients,
+      generationId: String(Date.now()),
     }),
   );
   const cookie = await commitSessionSafely(session);
@@ -105,6 +107,7 @@ function CookInner({ profile }: { profile: UserProfile }) {
 
   const suggestions = loaderData.suggestions;
   const submittedIngredients = loaderData.submittedIngredients;
+  const generationId = loaderData.generationId;
 
   const [ingredients, setIngredients] = useState(submittedIngredients);
   const [errorDismissed, setErrorDismissed] = useState(false);
@@ -116,18 +119,21 @@ function CookInner({ profile }: { profile: UserProfile }) {
   }, [submittedIngredients]);
 
   // Derive viewedIndices client-side: a suggestion is "viewed" if its recipe
-  // is cached in sessionStorage. This used to live in cookState but was
-  // growing the cookie past the 4KB limit on each click.
+  // is cached in sessionStorage for THIS generation. Scoping by generationId
+  // prevents stale recipes from a previous submission from polluting the
+  // current run.
   useEffect(() => {
-    if (typeof window === "undefined" || !suggestions) return;
+    if (typeof window === "undefined" || !suggestions || !generationId) return;
     const indices: number[] = [];
     for (let i = 0; i < suggestions.length; i++) {
-      if (window.sessionStorage.getItem(`recipe_cache_${i}`)) {
+      if (
+        window.sessionStorage.getItem(`recipe_cache_${generationId}_${i}`)
+      ) {
         indices.push(i);
       }
     }
     setViewedIndices(indices);
-  }, [suggestions]);
+  }, [suggestions, generationId]);
 
   const isSubmittingPost =
     navigation.state === "submitting" && navigation.formMethod === "POST";
@@ -303,6 +309,7 @@ function CookInner({ profile }: { profile: UserProfile }) {
                       meal={m}
                       index={i}
                       submittedIngredients={submittedIngredients}
+                      generationId={generationId}
                       viewed={viewedIndices.includes(i)}
                     />
                   ))}
