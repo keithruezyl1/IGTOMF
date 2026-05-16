@@ -272,7 +272,10 @@ export default function CookRecipeRoute() {
         </section>
 
         <Suspense fallback={null}>
-          <Await resolve={allReadyPromise}>
+          <Await
+            resolve={allReadyPromise}
+            errorElement={<span aria-hidden />}
+          >
             {([t, ing, s]: [RecipeTitle, RecipeIngredients, RecipeSteps]) => (
               <RecipeFooter
                 job={job}
