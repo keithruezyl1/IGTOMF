@@ -275,7 +275,7 @@ function CookInner({ profile }: { profile: UserProfile }) {
                 <div className="flex justify-center">
                   <MustafoBubble
                     messages={[
-                      "Don't overthink it — type whatever's in there.",
+                      "Don't overthink it. Type whatever's in there.",
                       "Spoiled stuff? I'll roast it lovingly.",
                       "Even random snacks count.",
                       "Trust me on this one.",
