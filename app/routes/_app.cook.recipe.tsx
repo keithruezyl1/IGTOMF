@@ -23,7 +23,12 @@ import {
   type RecipeTitle,
 } from "~/lib/ai.server";
 import { addDish } from "~/lib/dishes.client";
-import { consumeFlash, flash } from "~/lib/session.server";
+import {
+  consumeFlash,
+  getSession,
+  storage,
+  type CookState,
+} from "~/lib/session.server";
 import type { Dish } from "~/types";
 
 type RecipeJob = {
@@ -37,15 +42,34 @@ export async function action({ request }: ActionFunctionArgs) {
   const dishName = String(form.get("dishName") ?? "").trim();
   const ingredients = String(form.get("ingredients") ?? "").trim();
   const imageUrl = String(form.get("imageUrl") ?? "");
+  const indexRaw = form.get("index");
+  const index = indexRaw !== null ? Number(indexRaw) : -1;
   if (!dishName || !ingredients) {
     return redirect("/");
   }
-  const headers = await flash<RecipeJob>(request, "recipeJob", {
-    dishName,
-    ingredients,
-    imageUrl,
+
+  const session = await getSession(request);
+
+  // Mark this suggestion as viewed so coming back via "Try something else"
+  // shows the remaining cards.
+  const state = session.get("cookState") as CookState | undefined;
+  if (
+    state &&
+    Number.isInteger(index) &&
+    index >= 0 &&
+    !state.viewedIndices.includes(index)
+  ) {
+    session.set("cookState", {
+      ...state,
+      viewedIndices: [...state.viewedIndices, index],
+    });
+  }
+
+  session.flash("recipeJob", { dishName, ingredients, imageUrl } as RecipeJob);
+  const cookie = await storage.commitSession(session);
+  return redirect("/cook/recipe", {
+    headers: { "Set-Cookie": cookie },
   });
-  return redirect("/cook/recipe", { headers });
 }
 
 export async function loader({ request }: LoaderFunctionArgs) {

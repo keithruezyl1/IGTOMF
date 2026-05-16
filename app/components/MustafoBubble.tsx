@@ -50,7 +50,7 @@ export function MustafoBubble({
         transition={{ type: "spring", stiffness: 280, damping: 18 }}
       />
       <div
-        className={`relative bg-white rounded-card shadow-card px-5 py-4 max-w-xs min-w-[180px] ${
+        className={`relative bg-white rounded-card shadow-card px-5 py-4 max-w-xs min-w-[180px] mb-3 md:mb-5 ${
           align === "right" ? "text-right" : "text-left"
         }`}
       >
