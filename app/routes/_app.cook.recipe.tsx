@@ -25,9 +25,10 @@ import {
 import { addDish } from "~/lib/dishes.client";
 import {
   consumeFlash,
+  decodeCookState,
+  encodeCookState,
   getSession,
   storage,
-  type CookState,
 } from "~/lib/session.server";
 import type { Dish } from "~/types";
 
@@ -52,17 +53,21 @@ export async function action({ request }: ActionFunctionArgs) {
 
   // Mark this suggestion as viewed so coming back via "Try something else"
   // shows the remaining cards.
-  const state = session.get("cookState") as CookState | undefined;
+  const encoded = session.get("cookState") as string | undefined;
+  const state = encoded ? decodeCookState(encoded) : null;
   if (
     state &&
     Number.isInteger(index) &&
     index >= 0 &&
     !state.viewedIndices.includes(index)
   ) {
-    session.set("cookState", {
-      ...state,
-      viewedIndices: [...state.viewedIndices, index],
-    });
+    session.set(
+      "cookState",
+      encodeCookState({
+        ...state,
+        viewedIndices: [...state.viewedIndices, index],
+      }),
+    );
   }
 
   session.flash("recipeJob", { dishName, ingredients, imageUrl } as RecipeJob);

@@ -22,9 +22,10 @@ import {
 } from "~/lib/ai.server";
 import { EXPRESSIONS, LOADING_MESSAGES, TALKING } from "~/lib/mustafo";
 import {
+  decodeCookState,
+  encodeCookState,
   getSession,
   storage,
-  type CookState,
 } from "~/lib/session.server";
 import type { UserProfile } from "~/types";
 import { useAppContext } from "./_app";
@@ -38,7 +39,8 @@ const RECIPE_LOADING = [
 
 export async function loader({ request }: LoaderFunctionArgs) {
   const session = await getSession(request);
-  const state = session.get("cookState") as CookState | undefined;
+  const encoded = session.get("cookState") as string | undefined;
+  const state = encoded ? decodeCookState(encoded) : null;
 
   // All viewed → reset suggestions but keep the textarea pre-populated
   if (
@@ -79,11 +81,14 @@ export async function action({ request }: ActionFunctionArgs) {
     return json({ error: result.message }, { status: 500 });
   }
   const session = await getSession(request);
-  session.set("cookState", {
-    suggestions: result.suggestions,
-    submittedIngredients: ingredients,
-    viewedIndices: [],
-  });
+  session.set(
+    "cookState",
+    encodeCookState({
+      suggestions: result.suggestions,
+      submittedIngredients: ingredients,
+      viewedIndices: [],
+    }),
+  );
   const cookie = await storage.commitSession(session);
   return redirect("/", { headers: { "Set-Cookie": cookie } });
 }
@@ -148,12 +153,11 @@ function CookInner({ profile }: { profile: UserProfile }) {
             />
             <div className="pt-2">
               <h1 className="font-display font-bold text-2xl md:text-4xl text-ink leading-tight">
-                Hey {profile.username.split(" ")[0]} —{" "}
+                Hey {profile.username.split(" ")[0]}, {" "}
                 <span className="text-fresh">what's in there?</span>
               </h1>
               <p className="font-body text-sm md:text-base text-muted leading-relaxed mt-1.5 max-w-lg">
-                Drop everything you've got. Expired stuff is fine — I'll skip what's
-                cursed.
+                Drop everything you've got. Expired stuff is fine, I'll skip what's cursed.
               </p>
             </div>
           </div>

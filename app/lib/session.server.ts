@@ -7,6 +7,23 @@ export type CookState = {
   viewedIndices: number[];
 };
 
+// Encode/decode CookState as ASCII-safe base64 so multibyte chars (emoji)
+// survive the cookie round-trip. Without this, emojis come back as mojibake
+// (UTF-8 bytes decoded as Latin-1).
+export function encodeCookState(state: CookState): string {
+  return Buffer.from(JSON.stringify(state), "utf8").toString("base64");
+}
+
+export function decodeCookState(encoded: string): CookState | null {
+  try {
+    return JSON.parse(
+      Buffer.from(encoded, "base64").toString("utf8"),
+    ) as CookState;
+  } catch {
+    return null;
+  }
+}
+
 const secret = process.env.SESSION_SECRET;
 if (!secret) {
   throw new Error(
@@ -16,7 +33,7 @@ if (!secret) {
 
 type SessionData = {
   profile: UserProfile;
-  cookState: CookState;
+  cookState: string; // base64-encoded CookState — see encode/decodeCookState
 };
 
 type SessionFlash = {
