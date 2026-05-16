@@ -1,15 +1,14 @@
 import {
   defer,
-  json,
   redirect,
   type ActionFunctionArgs,
   type LoaderFunctionArgs,
 } from "@remix-run/node";
 import {
   Await,
-  useFetcher,
   useLoaderData,
   useNavigate,
+  type ClientLoaderFunctionArgs,
 } from "@remix-run/react";
 import { Suspense, useEffect, useRef } from "react";
 import { v4 as uuid } from "uuid";
@@ -30,13 +29,11 @@ import {
 } from "~/lib/ai.server";
 import { addDish } from "~/lib/dishes.client";
 import {
-  cacheRecipe,
   consumeFlash,
   decodeCookState,
   encodeCookState,
   getSession,
   storage,
-  type CachedRecipe,
 } from "~/lib/session.server";
 import type { Dish, RecipeIngredient } from "~/types";
 
@@ -47,15 +44,44 @@ type RecipeJob = {
   index: number;
 };
 
+type CachedEntry = {
+  job: RecipeJob;
+  title: RecipeTitle;
+  ingredients: RecipeIngredients;
+  steps: RecipeSteps;
+};
+
+const SESSION_CACHE_PREFIX = "recipe_cache_";
+
+function sessionCacheKey(index: number): string {
+  return `${SESSION_CACHE_PREFIX}${index}`;
+}
+
+function readRecipeCache(index: number): CachedEntry | null {
+  if (typeof window === "undefined") return null;
+  try {
+    const raw = window.sessionStorage.getItem(sessionCacheKey(index));
+    if (!raw) return null;
+    return JSON.parse(raw) as CachedEntry;
+  } catch {
+    return null;
+  }
+}
+
+function writeRecipeCache(index: number, entry: CachedEntry) {
+  if (typeof window === "undefined") return;
+  try {
+    window.sessionStorage.setItem(
+      sessionCacheKey(index),
+      JSON.stringify(entry),
+    );
+  } catch {
+    // sessionStorage may be unavailable in private mode; safe to skip
+  }
+}
+
 export async function action({ request }: ActionFunctionArgs) {
   const form = await request.formData();
-  const intent = String(form.get("intent") ?? "select");
-
-  if (intent === "cache") {
-    return handleCacheWrite(request, form);
-  }
-
-  // Default: user picked a meal card.
   const dishName = String(form.get("dishName") ?? "").trim();
   const ingredients = String(form.get("ingredients") ?? "").trim();
   const imageUrl = String(form.get("imageUrl") ?? "");
@@ -84,49 +110,15 @@ export async function action({ request }: ActionFunctionArgs) {
     );
   }
 
-  // Flash only the small request payload. The loader resolves the cache hit
-  // from cookState directly so we don't duplicate the recipe in the cookie
-  // (which can overflow the 4KB browser limit).
   const job: RecipeJob = { dishName, ingredients, imageUrl, index };
   session.flash("recipeJob", job);
   const cookie = await storage.commitSession(session);
-  return redirect("/cook/recipe", {
-    headers: { "Set-Cookie": cookie },
-  });
-}
-
-async function handleCacheWrite(request: Request, form: FormData) {
-  const indexRaw = form.get("index");
-  const index = indexRaw !== null ? Number(indexRaw) : -1;
-  if (!Number.isInteger(index) || index < 0) {
-    return json({ ok: false, error: "bad index" }, { status: 400 });
-  }
-
-  let ingredients: RecipeIngredient[] = [];
-  let instructions: string[] = [];
-  try {
-    ingredients = JSON.parse(String(form.get("ingredients") ?? "[]"));
-    instructions = JSON.parse(String(form.get("instructions") ?? "[]"));
-  } catch {
-    return json({ ok: false, error: "bad json" }, { status: 400 });
-  }
-
-  const recipe: CachedRecipe = {
-    title: String(form.get("title") ?? ""),
-    intro: String(form.get("intro") ?? ""),
-    ingredients,
-    instructions,
-    celebration: String(form.get("celebration") ?? ""),
-  };
-
-  const session = await getSession(request);
-  const encoded = session.get("cookState") as string | undefined;
-  const state = encoded ? decodeCookState(encoded) : null;
-  if (!state) return json({ ok: true }); // nothing to update
-
-  session.set("cookState", encodeCookState(cacheRecipe(state, index, recipe)));
-  const cookie = await storage.commitSession(session);
-  return json({ ok: true }, { headers: { "Set-Cookie": cookie } });
+  // Put the index in the URL so clientLoader can short-circuit to sessionStorage.
+  const target =
+    Number.isInteger(index) && index >= 0
+      ? `/cook/recipe?i=${index}`
+      : "/cook/recipe";
+  return redirect(target, { headers: { "Set-Cookie": cookie } });
 }
 
 export async function loader({ request }: LoaderFunctionArgs) {
@@ -135,36 +127,6 @@ export async function loader({ request }: LoaderFunctionArgs) {
     "recipeJob",
   );
   if (!job) throw redirect("/");
-
-  // Resolve cache from cookState (the flash itself doesn't carry the recipe).
-  const session = await getSession(request);
-  const encoded = session.get("cookState") as string | undefined;
-  const state = encoded ? decodeCookState(encoded) : null;
-  const cached =
-    state && Number.isInteger(job.index) && job.index >= 0
-      ? state.recipes[String(job.index)] ?? null
-      : null;
-
-  if (cached) {
-    return defer(
-      {
-        job,
-        wasCached: true as const,
-        titlePromise: Promise.resolve<RecipeTitle>({
-          title: cached.title,
-          intro: cached.intro,
-        }),
-        ingredientsPromise: Promise.resolve<RecipeIngredients>({
-          ingredients: cached.ingredients,
-        }),
-        stepsPromise: Promise.resolve<RecipeSteps>({
-          instructions: cached.instructions,
-          celebration: cached.celebration,
-        }),
-      },
-      { headers },
-    );
-  }
 
   const titlePromise = generateRecipeTitle(job.dishName, job.ingredients);
   const ingredientsPromise = titlePromise.then((t) =>
@@ -177,7 +139,6 @@ export async function loader({ request }: LoaderFunctionArgs) {
   return defer(
     {
       job,
-      wasCached: false as const,
       titlePromise,
       ingredientsPromise,
       stepsPromise,
@@ -186,8 +147,31 @@ export async function loader({ request }: LoaderFunctionArgs) {
   );
 }
 
+export async function clientLoader({
+  request,
+  serverLoader,
+}: ClientLoaderFunctionArgs) {
+  const url = new URL(request.url);
+  const idxStr = url.searchParams.get("i");
+  const idx = idxStr !== null ? Number(idxStr) : -1;
+
+  if (Number.isInteger(idx) && idx >= 0) {
+    const cached = readRecipeCache(idx);
+    if (cached) {
+      return {
+        job: cached.job,
+        titlePromise: Promise.resolve(cached.title),
+        ingredientsPromise: Promise.resolve(cached.ingredients),
+        stepsPromise: Promise.resolve(cached.steps),
+      };
+    }
+  }
+
+  return serverLoader();
+}
+
 export default function CookRecipeRoute() {
-  const { job, wasCached, titlePromise, ingredientsPromise, stepsPromise } =
+  const { job, titlePromise, ingredientsPromise, stepsPromise } =
     useLoaderData<typeof loader>();
   const navigate = useNavigate();
   const { notify } = useToast();
@@ -298,15 +282,10 @@ export default function CookRecipeRoute() {
           >
             {([t, ing, s]: [RecipeTitle, RecipeIngredients, RecipeSteps]) => (
               <RecipeFooter
-                index={job.index}
-                wasCached={wasCached}
-                dishTitle={t.title}
-                intro={t.intro}
-                ingredients={ing.ingredients}
-                instructions={s.instructions}
-                celebration={s.celebration}
-                imageUrl={job.imageUrl}
-                originalIngredients={job.ingredients}
+                job={job}
+                title={t}
+                ingredients={ing}
+                steps={s}
                 onTryElse={tryElse}
                 onSaved={(name) =>
                   notify(`Saved ${name}. Go cook, chef!`, "success")
@@ -329,59 +308,53 @@ function ErrorBlock({ message }: { message: string }) {
 }
 
 function RecipeFooter(props: {
-  index: number;
-  wasCached: boolean;
-  dishTitle: string;
-  intro: string;
-  ingredients: RecipeIngredients["ingredients"];
-  instructions: string[];
-  celebration: string;
-  imageUrl: string;
-  originalIngredients: string;
+  job: RecipeJob;
+  title: RecipeTitle;
+  ingredients: RecipeIngredients;
+  steps: RecipeSteps;
   onTryElse: () => void;
   onSaved: (name: string) => void;
 }) {
   const navigate = useNavigate();
-  const cacheFetcher = useFetcher();
   const cacheWritten = useRef(false);
 
-  // First-generation cache write-back. Skip if this view was already served
-  // from cache (wasCached) or if we've already written for this mount.
+  // Persist the resolved recipe to sessionStorage so revisiting the same
+  // suggestion in this tab skips regeneration. Idempotent for cache hits.
   useEffect(() => {
-    if (props.wasCached || cacheWritten.current) return;
-    if (props.index < 0) return;
+    if (cacheWritten.current) return;
+    if (props.job.index < 0) return;
     cacheWritten.current = true;
-    const fd = new FormData();
-    fd.set("intent", "cache");
-    fd.set("index", String(props.index));
-    fd.set("title", props.dishTitle);
-    fd.set("intro", props.intro);
-    fd.set("celebration", props.celebration);
-    fd.set("ingredients", JSON.stringify(props.ingredients));
-    fd.set("instructions", JSON.stringify(props.instructions));
-    cacheFetcher.submit(fd, { method: "post", action: "/cook/recipe" });
+    writeRecipeCache(props.job.index, {
+      job: props.job,
+      title: props.title,
+      ingredients: props.ingredients,
+      steps: props.steps,
+    });
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   function makingIt() {
+    const ingredients: RecipeIngredient[] = props.ingredients.ingredients;
+    const instructions: string[] = props.steps.instructions;
     const dish: Dish = {
       id: uuid(),
-      dishName: props.dishTitle,
+      dishName: props.title.title,
       recipe: {
-        intro: "",
-        ingredients: props.ingredients,
-        instructions: props.instructions,
-        celebration: props.celebration,
+        intro: props.title.intro,
+        ingredients,
+        instructions,
+        celebration: props.steps.celebration,
       },
-      originalIngredients: props.originalIngredients,
-      mealImage: props.imageUrl || null,
+      originalIngredients: props.job.ingredients,
+      mealImage: props.job.imageUrl || null,
       rating: 0,
       createdAt: new Date().toISOString(),
     };
     addDish(dish);
-    props.onSaved(props.dishTitle);
+    props.onSaved(props.title.title);
     setTimeout(() => navigate("/profile"), 600);
   }
+
   return (
     <div className="flex flex-col-reverse sm:flex-row gap-3 pt-2">
       <button

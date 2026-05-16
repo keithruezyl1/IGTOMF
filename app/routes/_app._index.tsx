@@ -111,8 +111,6 @@ export async function action({ request }: ActionFunctionArgs) {
       suggestions: result.suggestions,
       submittedIngredients: ingredients,
       viewedIndices: [],
-      recipes: {},
-      recipeOrder: [],
     }),
   );
   const cookie = await storage.commitSession(session);
