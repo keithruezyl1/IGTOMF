@@ -1,17 +1,17 @@
 import { useNavigate } from "@remix-run/react";
 import { AnimatePresence, motion } from "motion/react";
-import { useEffect, useRef, useState } from "react";
+import { useRef, useState } from "react";
 import { v4 as uuid } from "uuid";
 
 import { LoadingOverlay } from "~/components/LoadingOverlay";
 import { MealSuggestionCard } from "~/components/MealSuggestionCard";
 import { MustafoBubble } from "~/components/MustafoBubble";
-import { NavBar } from "~/components/NavBar";
 import { RecipeView } from "~/components/RecipeView";
-import { ToastProvider, useToast } from "~/components/Toast";
+import { useToast } from "~/components/Toast";
+import { addDish } from "~/lib/dishes.client";
 import { LOADING_MESSAGES, TALKING } from "~/lib/mustafo";
-import { addDish, getProfile } from "~/lib/storage";
 import type { Dish, MealSuggestion, Recipe, UserProfile } from "~/types";
+import { useAppContext } from "./_app";
 
 const RECIPE_LOADING = [
   "Pulling together the recipe...",
@@ -136,8 +136,6 @@ function CookInner({ profile }: { profile: UserProfile }) {
 
   return (
     <>
-      <NavBar username={profile.username} profileImage={profile.profileImage} />
-
       <main className="max-w-5xl mx-auto px-4 md:px-8 pt-6 pb-24">
         {/* Greeting */}
         <section className="mb-6 md:mb-10">
@@ -296,23 +294,6 @@ function CookInner({ profile }: { profile: UserProfile }) {
 }
 
 export default function CookRoute() {
-  const navigate = useNavigate();
-  const [profile, setProfile] = useState<UserProfile | null>(null);
-
-  useEffect(() => {
-    const p = getProfile();
-    if (!p) {
-      navigate("/onboarding", { replace: true });
-      return;
-    }
-    setProfile(p);
-  }, [navigate]);
-
-  if (!profile) return null;
-
-  return (
-    <ToastProvider>
-      <CookInner profile={profile} />
-    </ToastProvider>
-  );
+  const { profile } = useAppContext();
+  return <CookInner profile={profile} />;
 }
