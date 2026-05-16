@@ -48,7 +48,12 @@ type CachedEntry = {
   title: RecipeTitle;
   ingredients: RecipeIngredients;
   steps: RecipeSteps;
+  expiresAt: number;
 };
+
+// Recipes age out 30 minutes after generation. sessionStorage already clears
+// on tab close; this TTL handles the "user keeps the tab open for hours" case.
+const RECIPE_TTL_MS = 30 * 60 * 1000;
 
 function sessionCacheKey(generationId: string, index: number): string {
   return `recipe_cache_${generationId}_${index}`;
@@ -60,11 +65,18 @@ function readRecipeCache(
 ): CachedEntry | null {
   if (typeof window === "undefined" || !generationId) return null;
   try {
-    const raw = window.sessionStorage.getItem(
-      sessionCacheKey(generationId, index),
-    );
+    const key = sessionCacheKey(generationId, index);
+    const raw = window.sessionStorage.getItem(key);
     if (!raw) return null;
-    return JSON.parse(raw) as CachedEntry;
+    const entry = JSON.parse(raw) as CachedEntry;
+    if (
+      typeof entry.expiresAt !== "number" ||
+      entry.expiresAt < Date.now()
+    ) {
+      window.sessionStorage.removeItem(key);
+      return null;
+    }
+    return entry;
   } catch {
     return null;
   }
@@ -73,13 +85,13 @@ function readRecipeCache(
 function writeRecipeCache(
   generationId: string,
   index: number,
-  entry: CachedEntry,
+  entry: Omit<CachedEntry, "expiresAt">,
 ) {
   if (typeof window === "undefined" || !generationId) return;
   try {
     window.sessionStorage.setItem(
       sessionCacheKey(generationId, index),
-      JSON.stringify(entry),
+      JSON.stringify({ ...entry, expiresAt: Date.now() + RECIPE_TTL_MS }),
     );
   } catch {
     // sessionStorage may be unavailable in private mode; safe to skip

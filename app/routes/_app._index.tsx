@@ -119,17 +119,26 @@ function CookInner({ profile }: { profile: UserProfile }) {
   }, [submittedIngredients]);
 
   // Derive viewedIndices client-side: a suggestion is "viewed" if its recipe
-  // is cached in sessionStorage for THIS generation. Scoping by generationId
-  // prevents stale recipes from a previous submission from polluting the
-  // current run.
+  // is cached AND not expired in sessionStorage for THIS generation. Scoping
+  // by generationId prevents stale recipes from a previous submission from
+  // polluting the current run.
   useEffect(() => {
     if (typeof window === "undefined" || !suggestions || !generationId) return;
     const indices: number[] = [];
+    const now = Date.now();
     for (let i = 0; i < suggestions.length; i++) {
-      if (
-        window.sessionStorage.getItem(`recipe_cache_${generationId}_${i}`)
-      ) {
-        indices.push(i);
+      const key = `recipe_cache_${generationId}_${i}`;
+      const raw = window.sessionStorage.getItem(key);
+      if (!raw) continue;
+      try {
+        const entry = JSON.parse(raw) as { expiresAt?: number };
+        if (typeof entry.expiresAt === "number" && entry.expiresAt > now) {
+          indices.push(i);
+        } else {
+          window.sessionStorage.removeItem(key);
+        }
+      } catch {
+        window.sessionStorage.removeItem(key);
       }
     }
     setViewedIndices(indices);
