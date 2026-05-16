@@ -4,6 +4,10 @@ import type { MealSuggestion, UserProfile } from "~/types";
 export type CookState = {
   suggestions: MealSuggestion[];
   submittedIngredients: string;
+  // Bumps on every new submission. Scopes the client-side recipe cache so a
+  // fresh "Find me something" run doesn't inherit stale recipes from the
+  // previous batch (cache key includes this id).
+  generationId: string;
 };
 
 // Encode/decode CookState as ASCII-safe base64 so multibyte chars (emoji)
@@ -23,6 +27,7 @@ export function decodeCookState(encoded: string): CookState | null {
     return {
       suggestions: raw.suggestions ?? [],
       submittedIngredients: raw.submittedIngredients ?? "",
+      generationId: raw.generationId ?? "",
     };
   } catch {
     return null;

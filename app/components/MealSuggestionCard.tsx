@@ -6,6 +6,7 @@ type Props = {
   meal: MealSuggestion;
   index: number;
   submittedIngredients: string;
+  generationId: string;
   viewed?: boolean;
 };
 
@@ -30,6 +31,7 @@ export function MealSuggestionCard({
   meal,
   index,
   submittedIngredients,
+  generationId,
   viewed = false,
 }: Props) {
   const likelihood = Math.max(0, Math.min(100, Math.round(meal.likelihood)));
@@ -40,6 +42,7 @@ export function MealSuggestionCard({
       <input type="hidden" name="ingredients" value={submittedIngredients} />
       <input type="hidden" name="imageUrl" value={meal.imageUrl ?? ""} />
       <input type="hidden" name="index" value={String(index)} />
+      <input type="hidden" name="generationId" value={generationId} />
       <motion.button
         type="submit"
         className={`group text-left card-base overflow-hidden flex flex-col w-full focus:outline-none relative ${
