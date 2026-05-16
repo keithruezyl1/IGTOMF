@@ -64,29 +64,9 @@ export async function loader({ request }: LoaderFunctionArgs) {
   const state = encoded ? decodeCookState(encoded) : null;
   const copy = pickCopyIndices();
 
-  // All viewed → reset suggestions but keep the textarea pre-populated
-  if (
-    state &&
-    state.suggestions.length > 0 &&
-    state.viewedIndices.length >= state.suggestions.length
-  ) {
-    session.unset("cookState");
-    const cookie = await commitSessionSafely(session);
-    return json(
-      {
-        suggestions: null,
-        submittedIngredients: state.submittedIngredients,
-        viewedIndices: [] as number[],
-        copy,
-      },
-      cookie ? { headers: { "Set-Cookie": cookie } } : undefined,
-    );
-  }
-
   return json({
     suggestions: state?.suggestions ?? null,
     submittedIngredients: state?.submittedIngredients ?? "",
-    viewedIndices: state?.viewedIndices ?? [],
     copy,
   });
 }
@@ -110,7 +90,6 @@ export async function action({ request }: ActionFunctionArgs) {
     encodeCookState({
       suggestions: result.suggestions,
       submittedIngredients: ingredients,
-      viewedIndices: [],
     }),
   );
   const cookie = await commitSessionSafely(session);
@@ -126,15 +105,29 @@ function CookInner({ profile }: { profile: UserProfile }) {
 
   const suggestions = loaderData.suggestions;
   const submittedIngredients = loaderData.submittedIngredients;
-  const viewedIndices = loaderData.viewedIndices ?? [];
 
   const [ingredients, setIngredients] = useState(submittedIngredients);
   const [errorDismissed, setErrorDismissed] = useState(false);
+  const [viewedIndices, setViewedIndices] = useState<number[]>([]);
   const resultsRef = useRef<HTMLDivElement | null>(null);
 
   useEffect(() => {
     setIngredients(submittedIngredients);
   }, [submittedIngredients]);
+
+  // Derive viewedIndices client-side: a suggestion is "viewed" if its recipe
+  // is cached in sessionStorage. This used to live in cookState but was
+  // growing the cookie past the 4KB limit on each click.
+  useEffect(() => {
+    if (typeof window === "undefined" || !suggestions) return;
+    const indices: number[] = [];
+    for (let i = 0; i < suggestions.length; i++) {
+      if (window.sessionStorage.getItem(`recipe_cache_${i}`)) {
+        indices.push(i);
+      }
+    }
+    setViewedIndices(indices);
+  }, [suggestions]);
 
   const isSubmittingPost =
     navigation.state === "submitting" && navigation.formMethod === "POST";

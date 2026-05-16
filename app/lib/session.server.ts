@@ -4,12 +4,13 @@ import type { MealSuggestion, UserProfile } from "~/types";
 export type CookState = {
   suggestions: MealSuggestion[];
   submittedIngredients: string;
-  viewedIndices: number[];
 };
 
 // Encode/decode CookState as ASCII-safe base64 so multibyte chars (emoji)
 // survive the cookie round-trip. Without this, emojis come back as mojibake
-// (UTF-8 bytes decoded as Latin-1).
+// (UTF-8 bytes decoded as Latin-1). CookState is write-once: only the cook
+// action sets it. viewedIndices is intentionally not in here — the cookie
+// would grow on every meal click and tip past the 4KB browser limit.
 export function encodeCookState(state: CookState): string {
   return Buffer.from(JSON.stringify(state), "utf8").toString("base64");
 }
@@ -22,7 +23,6 @@ export function decodeCookState(encoded: string): CookState | null {
     return {
       suggestions: raw.suggestions ?? [],
       submittedIngredients: raw.submittedIngredients ?? "",
-      viewedIndices: raw.viewedIndices ?? [],
     };
   } catch {
     return null;
