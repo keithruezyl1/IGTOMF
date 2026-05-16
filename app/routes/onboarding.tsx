@@ -1,13 +1,80 @@
-import { useNavigate } from "@remix-run/react";
+import {
+  json,
+  redirect,
+  type ActionFunctionArgs,
+  type LoaderFunctionArgs,
+} from "@remix-run/node";
+import { Form, useNavigation } from "@remix-run/react";
 import { AnimatePresence, motion } from "motion/react";
 import { useEffect, useState } from "react";
 
 import { MustafoBubble } from "~/components/MustafoBubble";
-import { getProfile, setProfile } from "~/lib/storage";
+import { LEGACY_PROFILE_KEY } from "~/lib/dishes.client";
 import { EXPRESSIONS } from "~/lib/mustafo";
+import {
+  clearProfile,
+  getProfile,
+  setProfile,
+} from "~/lib/session.server";
+import type { UserProfile } from "~/types";
+
+export async function loader({ request }: LoaderFunctionArgs) {
+  const profile = await getProfile(request);
+  if (profile) throw redirect("/");
+  return null;
+}
+
+export async function action({ request }: ActionFunctionArgs) {
+  const form = await request.formData();
+  const intent = String(form.get("intent") ?? "");
+
+  if (intent === "migrate") {
+    const raw = String(form.get("profile") ?? "");
+    try {
+      const parsed = JSON.parse(raw) as Partial<UserProfile>;
+      if (
+        typeof parsed.username !== "string" ||
+        parsed.username.trim().length < 2
+      ) {
+        return json({ ok: false, error: "Invalid migrate payload" }, 400);
+      }
+      const profile: UserProfile = {
+        username: parsed.username.trim(),
+        profileImage:
+          typeof parsed.profileImage === "string" ? parsed.profileImage : null,
+        createdAt:
+          typeof parsed.createdAt === "string"
+            ? parsed.createdAt
+            : new Date().toISOString(),
+      };
+      const headers = await setProfile(request, profile);
+      return json({ ok: true }, { headers });
+    } catch {
+      return json({ ok: false, error: "Bad JSON" }, 400);
+    }
+  }
+
+  if (intent === "logout") {
+    const headers = await clearProfile(request);
+    return redirect("/onboarding", { headers });
+  }
+
+  const username = String(form.get("username") ?? "").trim();
+  const profileImage = String(form.get("profileImage") ?? "") || null;
+  if (username.length < 2 || username.length > 50) {
+    return json({ error: "Pick a name between 2 and 50 characters." }, 400);
+  }
+  const profile: UserProfile = {
+    username,
+    profileImage,
+    createdAt: new Date().toISOString(),
+  };
+  const headers = await setProfile(request, profile);
+  return redirect("/", { headers });
+}
 
 export default function Onboarding() {
-  const navigate = useNavigate();
+  const navigation = useNavigation();
   const [step, setStep] = useState<1 | 2>(1);
   const [username, setUsername] = useState("");
   const [profileImage, setProfileImage] = useState<string | null>(null);
@@ -15,10 +82,21 @@ export default function Onboarding() {
 
   useEffect(() => {
     setMounted(true);
-    if (getProfile()) navigate("/", { replace: true });
-  }, [navigate]);
+    const raw = window.localStorage.getItem(LEGACY_PROFILE_KEY);
+    if (!raw) return;
+    const body = new FormData();
+    body.set("intent", "migrate");
+    body.set("profile", raw);
+    fetch("/onboarding", { method: "POST", body }).then((res) => {
+      if (res.ok) {
+        window.localStorage.removeItem(LEGACY_PROFILE_KEY);
+        window.location.replace("/");
+      }
+    });
+  }, []);
 
-  const nameValid = username.trim().length >= 2 && username.trim().length <= 50;
+  const nameValid =
+    username.trim().length >= 2 && username.trim().length <= 50;
 
   function handleFile(file: File) {
     const reader = new FileReader();
@@ -28,14 +106,7 @@ export default function Onboarding() {
     reader.readAsDataURL(file);
   }
 
-  function finish(skipImage = false) {
-    setProfile({
-      username: username.trim(),
-      profileImage: skipImage ? null : profileImage,
-      createdAt: new Date().toISOString(),
-    });
-    navigate("/", { replace: true });
-  }
+  const isSubmitting = navigation.state === "submitting";
 
   if (!mounted) return null;
 
@@ -66,144 +137,150 @@ export default function Onboarding() {
           </div>
         </div>
 
-        <AnimatePresence mode="wait">
-          {step === 1 ? (
-            <motion.section
-              key="step1"
-              initial={{ opacity: 0, x: 30 }}
-              animate={{ opacity: 1, x: 0 }}
-              exit={{ opacity: 0, x: -30 }}
-              transition={{ duration: 0.35, ease: [0.4, 0, 0.2, 1] }}
-              className="card-base p-7 md:p-9"
-            >
-              <h1 className="font-display font-bold text-2xl md:text-3xl mb-2 text-ink">
-                Hey! I'm Mustafo.
-              </h1>
-              <p className="font-body text-sm md:text-base text-muted leading-relaxed mb-6">
-                I'm your personal AI chef who works with what you've actually got, like random stuff in your fridge.
-                What should I call you?
-              </p>
-
-              <label className="font-body font-semibold text-sm text-ink block mb-2">
-                What's your name?
-              </label>
-              <input
-                value={username}
-                onChange={(e) => setUsername(e.target.value)}
-                placeholder="e.g. Albert, FridgeMaster3000, or just 'Chef'"
-                maxLength={50}
-                autoFocus
-                className="input-base"
-                onKeyDown={(e) => {
-                  if (e.key === "Enter" && nameValid) setStep(2);
-                }}
+        <Form method="post">
+          <input type="hidden" name="username" value={username.trim()} />
+          <input
+            type="hidden"
+            name="profileImage"
+            value={profileImage ?? ""}
+          />
+          <AnimatePresence mode="wait">
+            {step === 1 ? (
+              <Step1
+                key="step1"
+                username={username}
+                setUsername={setUsername}
+                onNext={() => nameValid && setStep(2)}
+                disabled={!nameValid}
               />
-              {username && !nameValid && (
-                <p className="text-coral text-xs font-body mt-2 ml-1">
-                  Names should be 2–50 characters.
-                </p>
-              )}
-
-              <div className="mt-7 flex justify-end">
-                <button
-                  type="button"
-                  disabled={!nameValid}
-                  onClick={() => setStep(2)}
-                  className="btn-primary"
-                >
-                  Next
-                  <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round"><path d="M5 12h14M13 5l7 7-7 7"/></svg>
-                </button>
-              </div>
-            </motion.section>
-          ) : (
-            <motion.section
-              key="step2"
-              initial={{ opacity: 0, x: 30 }}
-              animate={{ opacity: 1, x: 0 }}
-              exit={{ opacity: 0, x: -30 }}
-              transition={{ duration: 0.35, ease: [0.4, 0, 0.2, 1] }}
-              className="card-base p-7 md:p-9"
-            >
-              <h1 className="font-display font-bold text-2xl md:text-3xl mb-2 text-ink">
-                Nice to meet you, {username.split(" ")[0]}.
-              </h1>
-              <p className="font-body text-sm md:text-base text-muted leading-relaxed mb-6">
-                Drop a profile pic so I can recognize you. (Totally optional.)
-              </p>
-
-              <label className="relative flex flex-col items-center justify-center gap-3 cursor-pointer rounded-card border-2 border-dashed border-[#E5E7EB] hover:border-fresh hover:bg-fresh/5 transition-all p-8 group">
-                {profileImage ? (
-                  <img
-                    src={profileImage}
-                    alt="Preview"
-                    className="w-28 h-28 rounded-full object-cover ring-4 ring-fresh/30"
-                  />
-                ) : (
-                  <span className="text-5xl group-hover:scale-110 transition-transform">
-                    📸
-                  </span>
-                )}
-                <span className="font-display font-semibold text-sm text-ink">
-                  {profileImage ? "Change photo" : "Click to upload"}
-                </span>
-                <span className="font-body text-xs text-muted">
-                  .jpg, .png, .webp — up to 2 MB
-                </span>
-                <input
-                  type="file"
-                  accept="image/jpeg,image/png,image/webp"
-                  className="absolute inset-0 opacity-0 cursor-pointer"
-                  onChange={(e) => {
-                    const file = e.target.files?.[0];
-                    if (file && file.size <= 2 * 1024 * 1024) handleFile(file);
-                  }}
-                />
-              </label>
-
-              <div className="mt-7 flex flex-col-reverse sm:flex-row sm:justify-between gap-3">
-                <button
-                  type="button"
-                  onClick={() => setStep(1)}
-                  className="btn-ghost"
-                >
-                  Back
-                </button>
-                <div className="flex flex-col sm:flex-row gap-3">
-                  <button
-                    type="button"
-                    onClick={() => finish(true)}
-                    className="btn-ghost"
-                  >
-                    Skip for now
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => finish(false)}
-                    className="btn-primary"
-                  >
-                    Let's cook
-                    <span aria-hidden>👨‍🍳</span>
-                  </button>
-                </div>
-              </div>
-            </motion.section>
-          )}
-        </AnimatePresence>
-
-        {step === 1 && (
-          <div className="mt-8 flex justify-center">
-            <MustafoBubble
-              messages={[
-                "Don't overthink the name.",
-                "First name's fine.",
-                "Or a chef nickname — go wild.",
-              ]}
-              size="sm"
-            />
-          </div>
-        )}
+            ) : (
+              <Step2
+                key="step2"
+                username={username}
+                profileImage={profileImage}
+                onPick={handleFile}
+                onSkip={() => setProfileImage(null)}
+                isSubmitting={isSubmitting}
+              />
+            )}
+          </AnimatePresence>
+        </Form>
       </div>
     </main>
+  );
+}
+
+function Step1(props: {
+  username: string;
+  setUsername: (v: string) => void;
+  onNext: () => void;
+  disabled: boolean;
+}) {
+  return (
+    <motion.section
+      initial={{ opacity: 0, x: 30 }}
+      animate={{ opacity: 1, x: 0 }}
+      exit={{ opacity: 0, x: -30 }}
+      transition={{ duration: 0.35, ease: [0.4, 0, 0.2, 1] }}
+      className="card-base p-7 md:p-9"
+    >
+      <h1 className="font-display font-bold text-2xl md:text-3xl mb-2 text-ink">
+        Hey! I'm Mustafo.
+      </h1>
+      <p className="font-body text-sm md:text-base text-muted leading-relaxed mb-6">
+        I'm your personal AI chef who works with what you've actually got, like random stuff in your fridge.
+        What should I call you?
+      </p>
+      <input
+        type="text"
+        value={props.username}
+        onChange={(e) => props.setUsername(e.target.value)}
+        placeholder="your name"
+        className="input-base"
+        autoFocus
+      />
+      <button
+        type="button"
+        onClick={props.onNext}
+        disabled={props.disabled}
+        className="btn-primary mt-5 w-full"
+      >
+        Continue
+      </button>
+      <div className="mt-6 flex justify-center">
+        <MustafoBubble
+          align="left"
+          size="sm"
+          messages={[
+            "I won't share your name anywhere.",
+            "Nickname works too.",
+          ]}
+        />
+      </div>
+    </motion.section>
+  );
+}
+
+function Step2(props: {
+  username: string;
+  profileImage: string | null;
+  onPick: (file: File) => void;
+  onSkip: () => void;
+  isSubmitting: boolean;
+}) {
+  return (
+    <motion.section
+      initial={{ opacity: 0, x: 30 }}
+      animate={{ opacity: 1, x: 0 }}
+      exit={{ opacity: 0, x: -30 }}
+      transition={{ duration: 0.35, ease: [0.4, 0, 0.2, 1] }}
+      className="card-base p-7 md:p-9"
+    >
+      <h1 className="font-display font-bold text-2xl md:text-3xl mb-2 text-ink">
+        Nice to meet you, {props.username.split(" ")[0]}.
+      </h1>
+      <p className="font-body text-muted mb-6">
+        Wanna add a profile picture? Totally optional.
+      </p>
+      <label className="block border-2 border-dashed border-soft rounded-2xl p-6 text-center cursor-pointer hover:bg-soft/30">
+        <input
+          type="file"
+          accept="image/*"
+          className="hidden"
+          onChange={(e) => {
+            const f = e.target.files?.[0];
+            if (f) props.onPick(f);
+          }}
+        />
+        {props.profileImage ? (
+          <img
+            src={props.profileImage}
+            alt="preview"
+            className="w-24 h-24 mx-auto rounded-full object-cover"
+          />
+        ) : (
+          <span className="font-body text-sm text-muted">
+            Tap to choose a photo
+          </span>
+        )}
+      </label>
+      <div className="flex gap-3 mt-5">
+        <button
+          type="submit"
+          onClick={() => props.onSkip()}
+          className="btn-ghost flex-1"
+          disabled={props.isSubmitting}
+        >
+          Skip
+        </button>
+        <button
+          type="submit"
+          className="btn-primary flex-1"
+          disabled={props.isSubmitting}
+        >
+          {props.isSubmitting ? "Saving..." : "Let's cook"}
+        </button>
+      </div>
+    </motion.section>
   );
 }
