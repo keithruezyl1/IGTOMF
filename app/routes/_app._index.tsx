@@ -140,7 +140,6 @@ function CookInner({ profile }: { profile: UserProfile }) {
         {/* Ingredient form */}
         <Form
           method="post"
-          action="/"
           className="card-base p-5 md:p-6 relative overflow-hidden"
         >
           <span className="absolute -top-10 -right-10 w-32 h-32 rounded-full bg-sunny/20 blur-2xl" />
