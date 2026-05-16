@@ -1,11 +1,17 @@
 import {
   defer,
+  json,
   redirect,
   type ActionFunctionArgs,
   type LoaderFunctionArgs,
 } from "@remix-run/node";
-import { Await, useLoaderData, useNavigate } from "@remix-run/react";
-import { Suspense } from "react";
+import {
+  Await,
+  useFetcher,
+  useLoaderData,
+  useNavigate,
+} from "@remix-run/react";
+import { Suspense, useEffect, useRef } from "react";
 import { v4 as uuid } from "uuid";
 
 import {
@@ -24,22 +30,33 @@ import {
 } from "~/lib/ai.server";
 import { addDish } from "~/lib/dishes.client";
 import {
+  cacheRecipe,
   consumeFlash,
   decodeCookState,
   encodeCookState,
   getSession,
   storage,
+  type CachedRecipe,
 } from "~/lib/session.server";
-import type { Dish } from "~/types";
+import type { Dish, RecipeIngredient } from "~/types";
 
 type RecipeJob = {
   dishName: string;
   ingredients: string;
   imageUrl: string;
+  index: number;
+  cached: CachedRecipe | null;
 };
 
 export async function action({ request }: ActionFunctionArgs) {
   const form = await request.formData();
+  const intent = String(form.get("intent") ?? "select");
+
+  if (intent === "cache") {
+    return handleCacheWrite(request, form);
+  }
+
+  // Default: user picked a meal card.
   const dishName = String(form.get("dishName") ?? "").trim();
   const ingredients = String(form.get("ingredients") ?? "").trim();
   const imageUrl = String(form.get("imageUrl") ?? "");
@@ -50,11 +67,14 @@ export async function action({ request }: ActionFunctionArgs) {
   }
 
   const session = await getSession(request);
-
-  // Mark this suggestion as viewed so coming back via "Try something else"
-  // shows the remaining cards.
   const encoded = session.get("cookState") as string | undefined;
   const state = encoded ? decodeCookState(encoded) : null;
+
+  const cached =
+    state && Number.isInteger(index) && index >= 0
+      ? state.recipes[String(index)] ?? null
+      : null;
+
   if (
     state &&
     Number.isInteger(index) &&
@@ -70,11 +90,46 @@ export async function action({ request }: ActionFunctionArgs) {
     );
   }
 
-  session.flash("recipeJob", { dishName, ingredients, imageUrl } as RecipeJob);
+  const job: RecipeJob = { dishName, ingredients, imageUrl, index, cached };
+  session.flash("recipeJob", job);
   const cookie = await storage.commitSession(session);
   return redirect("/cook/recipe", {
     headers: { "Set-Cookie": cookie },
   });
+}
+
+async function handleCacheWrite(request: Request, form: FormData) {
+  const indexRaw = form.get("index");
+  const index = indexRaw !== null ? Number(indexRaw) : -1;
+  if (!Number.isInteger(index) || index < 0) {
+    return json({ ok: false, error: "bad index" }, { status: 400 });
+  }
+
+  let ingredients: RecipeIngredient[] = [];
+  let instructions: string[] = [];
+  try {
+    ingredients = JSON.parse(String(form.get("ingredients") ?? "[]"));
+    instructions = JSON.parse(String(form.get("instructions") ?? "[]"));
+  } catch {
+    return json({ ok: false, error: "bad json" }, { status: 400 });
+  }
+
+  const recipe: CachedRecipe = {
+    title: String(form.get("title") ?? ""),
+    intro: String(form.get("intro") ?? ""),
+    ingredients,
+    instructions,
+    celebration: String(form.get("celebration") ?? ""),
+  };
+
+  const session = await getSession(request);
+  const encoded = session.get("cookState") as string | undefined;
+  const state = encoded ? decodeCookState(encoded) : null;
+  if (!state) return json({ ok: true }); // nothing to update
+
+  session.set("cookState", encodeCookState(cacheRecipe(state, index, recipe)));
+  const cookie = await storage.commitSession(session);
+  return json({ ok: true }, { headers: { "Set-Cookie": cookie } });
 }
 
 export async function loader({ request }: LoaderFunctionArgs) {
@@ -83,6 +138,28 @@ export async function loader({ request }: LoaderFunctionArgs) {
     "recipeJob",
   );
   if (!job) throw redirect("/");
+
+  if (job.cached) {
+    const cached = job.cached;
+    return defer(
+      {
+        job,
+        wasCached: true as const,
+        titlePromise: Promise.resolve<RecipeTitle>({
+          title: cached.title,
+          intro: cached.intro,
+        }),
+        ingredientsPromise: Promise.resolve<RecipeIngredients>({
+          ingredients: cached.ingredients,
+        }),
+        stepsPromise: Promise.resolve<RecipeSteps>({
+          instructions: cached.instructions,
+          celebration: cached.celebration,
+        }),
+      },
+      { headers },
+    );
+  }
 
   const titlePromise = generateRecipeTitle(job.dishName, job.ingredients);
   const ingredientsPromise = titlePromise.then((t) =>
@@ -95,6 +172,7 @@ export async function loader({ request }: LoaderFunctionArgs) {
   return defer(
     {
       job,
+      wasCached: false as const,
       titlePromise,
       ingredientsPromise,
       stepsPromise,
@@ -104,7 +182,7 @@ export async function loader({ request }: LoaderFunctionArgs) {
 }
 
 export default function CookRecipeRoute() {
-  const { job, titlePromise, ingredientsPromise, stepsPromise } =
+  const { job, wasCached, titlePromise, ingredientsPromise, stepsPromise } =
     useLoaderData<typeof loader>();
   const navigate = useNavigate();
   const { notify } = useToast();
@@ -215,7 +293,10 @@ export default function CookRecipeRoute() {
           >
             {([t, ing, s]: [RecipeTitle, RecipeIngredients, RecipeSteps]) => (
               <RecipeFooter
+                index={job.index}
+                wasCached={wasCached}
                 dishTitle={t.title}
+                intro={t.intro}
                 ingredients={ing.ingredients}
                 instructions={s.instructions}
                 celebration={s.celebration}
@@ -243,7 +324,10 @@ function ErrorBlock({ message }: { message: string }) {
 }
 
 function RecipeFooter(props: {
+  index: number;
+  wasCached: boolean;
   dishTitle: string;
+  intro: string;
   ingredients: RecipeIngredients["ingredients"];
   instructions: string[];
   celebration: string;
@@ -253,6 +337,27 @@ function RecipeFooter(props: {
   onSaved: (name: string) => void;
 }) {
   const navigate = useNavigate();
+  const cacheFetcher = useFetcher();
+  const cacheWritten = useRef(false);
+
+  // First-generation cache write-back. Skip if this view was already served
+  // from cache (wasCached) or if we've already written for this mount.
+  useEffect(() => {
+    if (props.wasCached || cacheWritten.current) return;
+    if (props.index < 0) return;
+    cacheWritten.current = true;
+    const fd = new FormData();
+    fd.set("intent", "cache");
+    fd.set("index", String(props.index));
+    fd.set("title", props.dishTitle);
+    fd.set("intro", props.intro);
+    fd.set("celebration", props.celebration);
+    fd.set("ingredients", JSON.stringify(props.ingredients));
+    fd.set("instructions", JSON.stringify(props.instructions));
+    cacheFetcher.submit(fd, { method: "post", action: "/cook/recipe" });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
   function makingIt() {
     const dish: Dish = {
       id: uuid(),

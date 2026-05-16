@@ -20,7 +20,15 @@ import {
   generateMealSuggestions,
   type SuggestionsResult,
 } from "~/lib/ai.server";
-import { EXPRESSIONS, LOADING_MESSAGES, TALKING } from "~/lib/mustafo";
+import {
+  COOK_GREETING_LINES,
+  COOK_GREETING_SUBLINES,
+  EXPRESSIONS,
+  LOADING_MESSAGES,
+  SUGGESTIONS_HEADERS,
+  SUGGESTIONS_SUBHEADERS,
+  TALKING,
+} from "~/lib/mustafo";
 import {
   decodeCookState,
   encodeCookState,
@@ -37,10 +45,24 @@ const RECIPE_LOADING = [
   "Almost there, chef...",
 ] as const;
 
+function pickCopyIndices() {
+  return {
+    greetingIdx: Math.floor(Math.random() * COOK_GREETING_LINES.length),
+    sublineIdx: Math.floor(Math.random() * COOK_GREETING_SUBLINES.length),
+    suggestionsHeaderIdx: Math.floor(
+      Math.random() * SUGGESTIONS_HEADERS.length,
+    ),
+    suggestionsSubheaderIdx: Math.floor(
+      Math.random() * SUGGESTIONS_SUBHEADERS.length,
+    ),
+  };
+}
+
 export async function loader({ request }: LoaderFunctionArgs) {
   const session = await getSession(request);
   const encoded = session.get("cookState") as string | undefined;
   const state = encoded ? decodeCookState(encoded) : null;
+  const copy = pickCopyIndices();
 
   // All viewed → reset suggestions but keep the textarea pre-populated
   if (
@@ -55,6 +77,7 @@ export async function loader({ request }: LoaderFunctionArgs) {
         suggestions: null,
         submittedIngredients: state.submittedIngredients,
         viewedIndices: [] as number[],
+        copy,
       },
       { headers: { "Set-Cookie": cookie } },
     );
@@ -64,6 +87,7 @@ export async function loader({ request }: LoaderFunctionArgs) {
     suggestions: state?.suggestions ?? null,
     submittedIngredients: state?.submittedIngredients ?? "",
     viewedIndices: state?.viewedIndices ?? [],
+    copy,
   });
 }
 
@@ -87,6 +111,8 @@ export async function action({ request }: ActionFunctionArgs) {
       suggestions: result.suggestions,
       submittedIngredients: ingredients,
       viewedIndices: [],
+      recipes: {},
+      recipeOrder: [],
     }),
   );
   const cookie = await storage.commitSession(session);
@@ -153,11 +179,16 @@ function CookInner({ profile }: { profile: UserProfile }) {
             />
             <div className="pt-2">
               <h1 className="font-display font-bold text-2xl md:text-4xl text-ink leading-tight">
-                Hey {profile.username.split(" ")[0]}, {" "}
-                <span className="text-fresh">what's in there?</span>
+                {COOK_GREETING_LINES[loaderData.copy.greetingIdx].prefix.replace(
+                  "{name}",
+                  profile.username.split(" ")[0],
+                )}{" "}
+                <span className="text-fresh">
+                  {COOK_GREETING_LINES[loaderData.copy.greetingIdx].highlight}
+                </span>
               </h1>
               <p className="font-body text-sm md:text-base text-muted leading-relaxed mt-1.5 max-w-lg">
-                Drop everything you've got. Expired stuff is fine, I'll skip what's cursed.
+                {COOK_GREETING_SUBLINES[loaderData.copy.sublineIdx]}
               </p>
             </div>
           </div>
@@ -264,11 +295,14 @@ function CookInner({ profile }: { profile: UserProfile }) {
               >
                 <div className="flex flex-col items-center text-center gap-3">
                   <h2 className="font-display font-bold text-2xl md:text-3xl text-ink">
-                    Here's what's calling your name
+                    {SUGGESTIONS_HEADERS[loaderData.copy.suggestionsHeaderIdx]}
                   </h2>
                   <p className="font-body text-muted max-w-md text-sm">
-                    Pick one and I'll walk you through it. Or scroll up and edit
-                    your fridge.
+                    {
+                      SUGGESTIONS_SUBHEADERS[
+                        loaderData.copy.suggestionsSubheaderIdx
+                      ]
+                    }
                   </p>
                 </div>
                 <div className="grid grid-cols-1 md:grid-cols-3 gap-5">

@@ -1,11 +1,43 @@
 import { createCookieSessionStorage, redirect } from "@remix-run/node";
-import type { MealSuggestion, UserProfile } from "~/types";
+import type {
+  MealSuggestion,
+  RecipeIngredient,
+  UserProfile,
+} from "~/types";
+
+export type CachedRecipe = {
+  title: string;
+  intro: string;
+  ingredients: RecipeIngredient[];
+  instructions: string[];
+  celebration: string;
+};
 
 export type CookState = {
   suggestions: MealSuggestion[];
   submittedIngredients: string;
   viewedIndices: number[];
+  recipes: Record<string, CachedRecipe>;
+  recipeOrder: number[]; // LRU insertion order, capped at RECIPE_CACHE_LIMIT
 };
+
+// Cookies cap at ~4KB. Each cached recipe is ~1-2KB. We keep only the most
+// recently-viewed N so the cookie can never overflow.
+export const RECIPE_CACHE_LIMIT = 2;
+
+export function cacheRecipe(
+  state: CookState,
+  index: number,
+  recipe: CachedRecipe,
+): CookState {
+  const recipes = { ...state.recipes, [String(index)]: recipe };
+  const order = state.recipeOrder.filter((i) => i !== index).concat(index);
+  while (order.length > RECIPE_CACHE_LIMIT) {
+    const evict = order.shift();
+    if (evict !== undefined) delete recipes[String(evict)];
+  }
+  return { ...state, recipes, recipeOrder: order };
+}
 
 // Encode/decode CookState as ASCII-safe base64 so multibyte chars (emoji)
 // survive the cookie round-trip. Without this, emojis come back as mojibake
@@ -16,9 +48,16 @@ export function encodeCookState(state: CookState): string {
 
 export function decodeCookState(encoded: string): CookState | null {
   try {
-    return JSON.parse(
+    const raw = JSON.parse(
       Buffer.from(encoded, "base64").toString("utf8"),
-    ) as CookState;
+    ) as Partial<CookState>;
+    return {
+      suggestions: raw.suggestions ?? [],
+      submittedIngredients: raw.submittedIngredients ?? "",
+      viewedIndices: raw.viewedIndices ?? [],
+      recipes: raw.recipes ?? {},
+      recipeOrder: raw.recipeOrder ?? [],
+    };
   } catch {
     return null;
   }
