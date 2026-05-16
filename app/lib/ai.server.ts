@@ -97,6 +97,29 @@ export async function generateMealSuggestions(
 
 // ---------- Recipe (streaming, three-step) ----------
 
+// Retries a call up to `attempts` times with exponential backoff. Used to
+// smooth over transient OpenAI failures (429 rate-limit, occasional timeouts,
+// malformed JSON). The steps generator is the most prone to this because it
+// runs last in the chain and gets the largest prompt.
+async function withRetry<T>(
+  fn: () => Promise<T>,
+  attempts: number = 3,
+): Promise<T> {
+  let lastErr: unknown;
+  for (let i = 0; i < attempts; i++) {
+    try {
+      return await fn();
+    } catch (err) {
+      lastErr = err;
+      if (i < attempts - 1) {
+        const delay = 400 * Math.pow(2, i); // 400ms, 800ms, 1600ms
+        await new Promise((resolve) => setTimeout(resolve, delay));
+      }
+    }
+  }
+  throw lastErr;
+}
+
 const TITLE_PROMPT = (dish: string, ingredients: string) => `Recipe for: "${dish}"
 Available ingredients from user: "${ingredients}"
 
@@ -113,22 +136,24 @@ export async function generateRecipeTitle(
   dishName: string,
   ingredients: string,
 ): Promise<RecipeTitle> {
-  const client = getOpenAI();
-  const completion = await client.chat.completions.create({
-    model: "gpt-4o",
-    response_format: { type: "json_object" },
-    temperature: 0.7,
-    messages: [
-      { role: "system", content: MUSTAFO_SYSTEM_PROMPT },
-      { role: "user", content: TITLE_PROMPT(dishName, ingredients) },
-    ],
+  return withRetry(async () => {
+    const client = getOpenAI();
+    const completion = await client.chat.completions.create({
+      model: "gpt-4o",
+      response_format: { type: "json_object" },
+      temperature: 0.7,
+      messages: [
+        { role: "system", content: MUSTAFO_SYSTEM_PROMPT },
+        { role: "user", content: TITLE_PROMPT(dishName, ingredients) },
+      ],
+    });
+    const raw = completion.choices[0]?.message?.content ?? "{}";
+    const parsed = JSON.parse(raw) as Partial<RecipeTitle>;
+    return {
+      title: String(parsed.title ?? dishName),
+      intro: String(parsed.intro ?? "You got this. Let's go."),
+    };
   });
-  const raw = completion.choices[0]?.message?.content ?? "{}";
-  const parsed = JSON.parse(raw) as Partial<RecipeTitle>;
-  return {
-    title: String(parsed.title ?? dishName),
-    intro: String(parsed.intro ?? "You got this. Let's go."),
-  };
 }
 
 const INGREDIENTS_PROMPT = (
@@ -161,30 +186,35 @@ export async function generateRecipeIngredients(
   dishName: string,
   ingredients: string,
 ): Promise<RecipeIngredients> {
-  const client = getOpenAI();
-  const completion = await client.chat.completions.create({
-    model: "gpt-4o",
-    response_format: { type: "json_object" },
-    temperature: 0.5,
-    messages: [
-      { role: "system", content: MUSTAFO_SYSTEM_PROMPT },
-      {
-        role: "user",
-        content: INGREDIENTS_PROMPT(title, dishName, ingredients),
-      },
-    ],
+  return withRetry(async () => {
+    const client = getOpenAI();
+    const completion = await client.chat.completions.create({
+      model: "gpt-4o",
+      response_format: { type: "json_object" },
+      temperature: 0.5,
+      messages: [
+        { role: "system", content: MUSTAFO_SYSTEM_PROMPT },
+        {
+          role: "user",
+          content: INGREDIENTS_PROMPT(title, dishName, ingredients),
+        },
+      ],
+    });
+    const raw = completion.choices[0]?.message?.content ?? "{}";
+    const parsed = JSON.parse(raw) as Partial<RecipeIngredients>;
+    const list = Array.isArray(parsed.ingredients)
+      ? parsed.ingredients.map((i) => ({
+          name: String(i?.name ?? ""),
+          quantity: String(i?.quantity ?? ""),
+          unit: String(i?.unit ?? ""),
+          isYouMightNeed: Boolean(i?.isYouMightNeed),
+        }))
+      : [];
+    if (list.length === 0) {
+      throw new Error("ingredients generator returned empty list");
+    }
+    return { ingredients: list };
   });
-  const raw = completion.choices[0]?.message?.content ?? "{}";
-  const parsed = JSON.parse(raw) as Partial<RecipeIngredients>;
-  const list = Array.isArray(parsed.ingredients)
-    ? parsed.ingredients.map((i) => ({
-        name: String(i?.name ?? ""),
-        quantity: String(i?.quantity ?? ""),
-        unit: String(i?.unit ?? ""),
-        isYouMightNeed: Boolean(i?.isYouMightNeed),
-      }))
-    : [];
-  return { ingredients: list };
 }
 
 const STEPS_PROMPT = (
@@ -214,24 +244,30 @@ export async function generateRecipeSteps(
   title: string,
   ingredientList: RecipeIngredient[],
 ): Promise<RecipeSteps> {
-  const client = getOpenAI();
-  const completion = await client.chat.completions.create({
-    model: "gpt-4o",
-    response_format: { type: "json_object" },
-    temperature: 0.7,
-    messages: [
-      { role: "system", content: MUSTAFO_SYSTEM_PROMPT },
-      { role: "user", content: STEPS_PROMPT(title, ingredientList) },
-    ],
+  return withRetry(async () => {
+    const client = getOpenAI();
+    const completion = await client.chat.completions.create({
+      model: "gpt-4o",
+      response_format: { type: "json_object" },
+      temperature: 0.7,
+      messages: [
+        { role: "system", content: MUSTAFO_SYSTEM_PROMPT },
+        { role: "user", content: STEPS_PROMPT(title, ingredientList) },
+      ],
+    });
+    const raw = completion.choices[0]?.message?.content ?? "{}";
+    const parsed = JSON.parse(raw) as Partial<RecipeSteps>;
+    const instructions = Array.isArray(parsed.instructions)
+      ? parsed.instructions.map(String).filter((s) => s.length > 0)
+      : [];
+    if (instructions.length === 0) {
+      throw new Error("steps generator returned empty instructions");
+    }
+    return {
+      instructions,
+      celebration: String(
+        parsed.celebration ?? "You just made something delicious. Be proud.",
+      ),
+    };
   });
-  const raw = completion.choices[0]?.message?.content ?? "{}";
-  const parsed = JSON.parse(raw) as Partial<RecipeSteps>;
-  return {
-    instructions: Array.isArray(parsed.instructions)
-      ? parsed.instructions.map(String)
-      : [],
-    celebration: String(
-      parsed.celebration ?? "You just made something delicious. Be proud.",
-    ),
-  };
 }
