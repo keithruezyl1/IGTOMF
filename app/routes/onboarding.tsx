@@ -9,7 +9,10 @@ import { AnimatePresence, motion } from "motion/react";
 import { useEffect, useState } from "react";
 
 import { MustafoBubble } from "~/components/MustafoBubble";
-import { LEGACY_PROFILE_KEY } from "~/lib/dishes.client";
+import {
+  LEGACY_PROFILE_KEY,
+  setProfileImage as setProfileImageLocal,
+} from "~/lib/dishes.client";
 import { EXPRESSIONS } from "~/lib/mustafo";
 import {
   clearProfile,
@@ -31,7 +34,7 @@ export async function action({ request }: ActionFunctionArgs) {
   if (intent === "migrate") {
     const raw = String(form.get("profile") ?? "");
     try {
-      const parsed = JSON.parse(raw) as Partial<UserProfile>;
+      const parsed = JSON.parse(raw) as { username?: unknown; createdAt?: unknown };
       if (
         typeof parsed.username !== "string" ||
         parsed.username.trim().length < 2
@@ -40,8 +43,6 @@ export async function action({ request }: ActionFunctionArgs) {
       }
       const profile: UserProfile = {
         username: parsed.username.trim(),
-        profileImage:
-          typeof parsed.profileImage === "string" ? parsed.profileImage : null,
         createdAt:
           typeof parsed.createdAt === "string"
             ? parsed.createdAt
@@ -60,13 +61,11 @@ export async function action({ request }: ActionFunctionArgs) {
   }
 
   const username = String(form.get("username") ?? "").trim();
-  const profileImage = String(form.get("profileImage") ?? "") || null;
   if (username.length < 2 || username.length > 50) {
     return json({ error: "Pick a name between 2 and 50 characters." }, 400);
   }
   const profile: UserProfile = {
     username,
-    profileImage,
     createdAt: new Date().toISOString(),
   };
   const headers = await setProfile(request, profile);
@@ -84,6 +83,16 @@ export default function Onboarding() {
     setMounted(true);
     const raw = window.localStorage.getItem(LEGACY_PROFILE_KEY);
     if (!raw) return;
+    try {
+      const parsed = JSON.parse(raw) as {
+        profileImage?: unknown;
+      };
+      if (typeof parsed.profileImage === "string") {
+        setProfileImageLocal(parsed.profileImage);
+      }
+    } catch {
+      // ignore — legacy payload was malformed
+    }
     const body = new FormData();
     body.set("intent", "migrate");
     body.set("profile", raw);
@@ -101,7 +110,10 @@ export default function Onboarding() {
   function handleFile(file: File) {
     const reader = new FileReader();
     reader.onload = () => {
-      if (typeof reader.result === "string") setProfileImage(reader.result);
+      if (typeof reader.result === "string") {
+        setProfileImage(reader.result);
+        setProfileImageLocal(reader.result);
+      }
     };
     reader.readAsDataURL(file);
   }
@@ -139,11 +151,6 @@ export default function Onboarding() {
 
         <Form method="post">
           <input type="hidden" name="username" value={username.trim()} />
-          <input
-            type="hidden"
-            name="profileImage"
-            value={profileImage ?? ""}
-          />
           <AnimatePresence mode="wait">
             {step === 1 ? (
               <Step1
@@ -159,7 +166,10 @@ export default function Onboarding() {
                 username={username}
                 profileImage={profileImage}
                 onPick={handleFile}
-                onSkip={() => setProfileImage(null)}
+                onSkip={() => {
+                  setProfileImage(null);
+                  setProfileImageLocal(null);
+                }}
                 isSubmitting={isSubmitting}
               />
             )}

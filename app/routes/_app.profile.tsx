@@ -7,6 +7,7 @@ import { MustafoBubble } from "~/components/MustafoBubble";
 import { useToast } from "~/components/Toast";
 import {
   clearDishes,
+  clearProfileImage,
   getDishes,
   updateDishRating,
 } from "~/lib/dishes.client";
@@ -16,9 +17,11 @@ import { useAppContext } from "./_app";
 
 function ProfileInner({
   profile,
+  profileImage,
   initialDishes,
 }: {
   profile: UserProfile;
+  profileImage: string | null;
   initialDishes: Dish[];
 }) {
   const { notify } = useToast();
@@ -33,6 +36,7 @@ function ProfileInner({
 
   function handleDelete() {
     clearDishes();
+    clearProfileImage();
     const body = new FormData();
     body.set("intent", "logout");
     fetch("/onboarding", { method: "POST", body }).then(() => {
@@ -68,9 +72,9 @@ function ProfileInner({
               animate={{ scale: 1, opacity: 1 }}
               transition={{ type: "spring", stiffness: 220, damping: 18 }}
             >
-              {profile.profileImage ? (
+              {profileImage ? (
                 <img
-                  src={profile.profileImage}
+                  src={profileImage}
                   alt={profile.username}
                   className="w-full h-full object-cover"
                 />
@@ -221,7 +225,7 @@ function ProfileInner({
 }
 
 export default function ProfileRoute() {
-  const { profile } = useAppContext();
+  const { profile, profileImage } = useAppContext();
   const [dishes, setDishes] = useState<Dish[] | null>(null);
 
   useEffect(() => {
@@ -229,5 +233,11 @@ export default function ProfileRoute() {
   }, []);
 
   if (!dishes) return null;
-  return <ProfileInner profile={profile} initialDishes={dishes} />;
+  return (
+    <ProfileInner
+      profile={profile}
+      profileImage={profileImage}
+      initialDishes={dishes}
+    />
+  );
 }
