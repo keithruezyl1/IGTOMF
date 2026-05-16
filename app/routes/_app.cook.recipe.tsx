@@ -10,6 +10,7 @@ import {
   useFetcher,
   useLoaderData,
   useNavigate,
+  type ShouldRevalidateFunctionArgs,
 } from "@remix-run/react";
 import { Suspense, useEffect, useMemo, useRef, useState } from "react";
 import { v4 as uuid } from "uuid";
@@ -74,6 +75,27 @@ function writeRecipeCache(
   } catch {
     // sessionStorage may be unavailable in private mode; safe to skip
   }
+}
+
+/**
+ * Skip loader revalidation when the refresh-steps fetcher runs. Without this
+ * Remix would re-run the loader after the action, the flash would already be
+ * consumed, the loader would throw redirect("/"), and the client would be
+ * yanked back to the suggestions page — the exact "page refreshes" behavior
+ * we don't want.
+ */
+export function shouldRevalidate({
+  formMethod,
+  formData,
+  defaultShouldRevalidate,
+}: ShouldRevalidateFunctionArgs) {
+  if (
+    formMethod?.toLowerCase() === "post" &&
+    formData?.get("intent") === "refresh-steps"
+  ) {
+    return false;
+  }
+  return defaultShouldRevalidate;
 }
 
 export async function action({ request }: ActionFunctionArgs) {
