@@ -6,6 +6,7 @@ type Props = {
   meal: MealSuggestion;
   index: number;
   submittedIngredients: string;
+  viewed?: boolean;
 };
 
 function fallbackGradient(emoji: string) {
@@ -25,7 +26,12 @@ function fallbackGradient(emoji: string) {
   return map[emoji] ?? "from-mint to-sunny";
 }
 
-export function MealSuggestionCard({ meal, index, submittedIngredients }: Props) {
+export function MealSuggestionCard({
+  meal,
+  index,
+  submittedIngredients,
+  viewed = false,
+}: Props) {
   const likelihood = Math.max(0, Math.min(100, Math.round(meal.likelihood)));
 
   return (
@@ -33,15 +39,26 @@ export function MealSuggestionCard({ meal, index, submittedIngredients }: Props)
       <input type="hidden" name="dishName" value={meal.name} />
       <input type="hidden" name="ingredients" value={submittedIngredients} />
       <input type="hidden" name="imageUrl" value={meal.imageUrl ?? ""} />
+      <input type="hidden" name="index" value={String(index)} />
       <motion.button
         type="submit"
-        className="group text-left card-base overflow-hidden flex flex-col w-full focus:outline-none"
+        className={`group text-left card-base overflow-hidden flex flex-col w-full focus:outline-none relative ${
+          viewed ? "opacity-60" : ""
+        }`}
         initial={{ opacity: 0, y: 18 }}
-        animate={{ opacity: 1, y: 0 }}
+        animate={{ opacity: viewed ? 0.6 : 1, y: 0 }}
         transition={{ delay: index * 0.08, type: "spring", stiffness: 220, damping: 22 }}
         whileHover={{ scale: 1.03, boxShadow: "0 12px 32px rgba(0,0,0,0.12)" }}
         whileTap={{ scale: 0.98 }}
       >
+        {viewed && (
+          <span className="absolute top-3 right-3 z-10 chip bg-fresh text-white text-xs font-display font-semibold inline-flex items-center gap-1 px-2.5 py-1 rounded-full shadow-button">
+            <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3" strokeLinecap="round" strokeLinejoin="round">
+              <path d="M20 6 9 17l-5-5" />
+            </svg>
+            Viewed
+          </span>
+        )}
         <div
           className={`relative h-44 md:h-48 bg-gradient-to-br ${fallbackGradient(
             meal.emoji,

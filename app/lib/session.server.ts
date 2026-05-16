@@ -1,5 +1,11 @@
 import { createCookieSessionStorage, redirect } from "@remix-run/node";
-import type { UserProfile } from "~/types";
+import type { MealSuggestion, UserProfile } from "~/types";
+
+export type CookState = {
+  suggestions: MealSuggestion[];
+  submittedIngredients: string;
+  viewedIndices: number[];
+};
 
 const secret = process.env.SESSION_SECRET;
 if (!secret) {
@@ -10,13 +16,14 @@ if (!secret) {
 
 type SessionData = {
   profile: UserProfile;
+  cookState: CookState;
 };
 
 type SessionFlash = {
   [key: string]: unknown;
 };
 
-const storage = createCookieSessionStorage<SessionData, SessionFlash>({
+export const storage = createCookieSessionStorage<SessionData, SessionFlash>({
   cookie: {
     name: "igtimf_session",
     httpOnly: true,

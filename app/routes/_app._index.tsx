@@ -21,8 +21,12 @@ import {
   type SuggestionsResult,
 } from "~/lib/ai.server";
 import { EXPRESSIONS, LOADING_MESSAGES, TALKING } from "~/lib/mustafo";
-import { consumeFlash, flash } from "~/lib/session.server";
-import type { MealSuggestion, UserProfile } from "~/types";
+import {
+  getSession,
+  storage,
+  type CookState,
+} from "~/lib/session.server";
+import type { UserProfile } from "~/types";
 import { useAppContext } from "./_app";
 
 const RECIPE_LOADING = [
@@ -32,20 +36,33 @@ const RECIPE_LOADING = [
   "Almost there, chef...",
 ] as const;
 
-type CookData = {
-  suggestions: MealSuggestion[];
-  submittedIngredients: string;
-};
-
 export async function loader({ request }: LoaderFunctionArgs) {
-  const { value, headers } = await consumeFlash<CookData>(request, "cookData");
-  return json(
-    {
-      suggestions: value?.suggestions ?? null,
-      submittedIngredients: value?.submittedIngredients ?? "",
-    },
-    { headers },
-  );
+  const session = await getSession(request);
+  const state = session.get("cookState") as CookState | undefined;
+
+  // All viewed → reset suggestions but keep the textarea pre-populated
+  if (
+    state &&
+    state.suggestions.length > 0 &&
+    state.viewedIndices.length >= state.suggestions.length
+  ) {
+    session.unset("cookState");
+    const cookie = await storage.commitSession(session);
+    return json(
+      {
+        suggestions: null,
+        submittedIngredients: state.submittedIngredients,
+        viewedIndices: [] as number[],
+      },
+      { headers: { "Set-Cookie": cookie } },
+    );
+  }
+
+  return json({
+    suggestions: state?.suggestions ?? null,
+    submittedIngredients: state?.submittedIngredients ?? "",
+    viewedIndices: state?.viewedIndices ?? [],
+  });
 }
 
 export async function action({ request }: ActionFunctionArgs) {
@@ -61,11 +78,14 @@ export async function action({ request }: ActionFunctionArgs) {
   if (result.kind === "error") {
     return json({ error: result.message }, { status: 500 });
   }
-  const headers = await flash<CookData>(request, "cookData", {
+  const session = await getSession(request);
+  session.set("cookState", {
     suggestions: result.suggestions,
     submittedIngredients: ingredients,
+    viewedIndices: [],
   });
-  return redirect("/", { headers });
+  const cookie = await storage.commitSession(session);
+  return redirect("/", { headers: { "Set-Cookie": cookie } });
 }
 
 type Stage = "chat" | "suggestions";
@@ -77,10 +97,15 @@ function CookInner({ profile }: { profile: UserProfile }) {
 
   const suggestions = loaderData.suggestions;
   const submittedIngredients = loaderData.submittedIngredients;
+  const viewedIndices = loaderData.viewedIndices ?? [];
 
-  const [ingredients, setIngredients] = useState("");
+  const [ingredients, setIngredients] = useState(submittedIngredients);
   const [errorDismissed, setErrorDismissed] = useState(false);
   const resultsRef = useRef<HTMLDivElement | null>(null);
+
+  useEffect(() => {
+    setIngredients(submittedIngredients);
+  }, [submittedIngredients]);
 
   const isSuggesting =
     navigation.state === "submitting" &&
@@ -171,10 +196,35 @@ function CookInner({ profile }: { profile: UserProfile }) {
             <button
               type="submit"
               disabled={!ingredients.trim() || isSuggesting}
-              className="btn-primary"
+              className={`btn-primary ${isSuggesting ? "!bg-[#16A34A] !cursor-wait" : ""}`}
+              aria-busy={isSuggesting}
             >
-              Find me something
-              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round"><path d="M5 12h14M13 5l7 7-7 7"/></svg>
+              {isSuggesting ? (
+                <>
+                  <svg
+                    className="animate-spin"
+                    width="16"
+                    height="16"
+                    viewBox="0 0 24 24"
+                    fill="none"
+                    stroke="currentColor"
+                    strokeWidth="2.5"
+                    strokeLinecap="round"
+                    strokeLinejoin="round"
+                    aria-hidden
+                  >
+                    <path d="M21 12a9 9 0 1 1-6.219-8.56" />
+                  </svg>
+                  Finding you something...
+                </>
+              ) : (
+                <>
+                  Find me something
+                  <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round" aria-hidden>
+                    <path d="M5 12h14M13 5l7 7-7 7" />
+                  </svg>
+                </>
+              )}
             </button>
           </div>
         </Form>
@@ -226,6 +276,7 @@ function CookInner({ profile }: { profile: UserProfile }) {
                       meal={m}
                       index={i}
                       submittedIngredients={submittedIngredients}
+                      viewed={viewedIndices.includes(i)}
                     />
                   ))}
                 </div>
