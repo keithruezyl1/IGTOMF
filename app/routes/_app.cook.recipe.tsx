@@ -4,12 +4,7 @@ import {
   type ActionFunctionArgs,
   type LoaderFunctionArgs,
 } from "@remix-run/node";
-import {
-  Await,
-  useLoaderData,
-  useNavigate,
-  type ClientLoaderFunctionArgs,
-} from "@remix-run/react";
+import { Await, useLoaderData, useNavigate } from "@remix-run/react";
 import { Suspense, useEffect, useMemo, useRef } from "react";
 import { v4 as uuid } from "uuid";
 
@@ -48,38 +43,27 @@ type CachedEntry = {
   title: RecipeTitle;
   ingredients: RecipeIngredients;
   steps: RecipeSteps;
+  expiresAt: number;
 };
+
+// Recipes age out 30 minutes after generation. sessionStorage already clears
+// on tab close; this TTL handles the "user keeps the tab open for hours" case.
+const RECIPE_TTL_MS = 30 * 60 * 1000;
 
 function sessionCacheKey(generationId: string, index: number): string {
   return `recipe_cache_${generationId}_${index}`;
 }
 
-function readRecipeCache(
-  generationId: string,
-  index: number,
-): CachedEntry | null {
-  if (typeof window === "undefined" || !generationId) return null;
-  try {
-    const raw = window.sessionStorage.getItem(
-      sessionCacheKey(generationId, index),
-    );
-    if (!raw) return null;
-    return JSON.parse(raw) as CachedEntry;
-  } catch {
-    return null;
-  }
-}
-
 function writeRecipeCache(
   generationId: string,
   index: number,
-  entry: CachedEntry,
+  entry: Omit<CachedEntry, "expiresAt">,
 ) {
   if (typeof window === "undefined" || !generationId) return;
   try {
     window.sessionStorage.setItem(
       sessionCacheKey(generationId, index),
-      JSON.stringify(entry),
+      JSON.stringify({ ...entry, expiresAt: Date.now() + RECIPE_TTL_MS }),
     );
   } catch {
     // sessionStorage may be unavailable in private mode; safe to skip
@@ -176,30 +160,6 @@ export async function loader({ request }: LoaderFunctionArgs) {
     },
     { headers },
   );
-}
-
-export async function clientLoader({
-  request,
-  serverLoader,
-}: ClientLoaderFunctionArgs) {
-  const url = new URL(request.url);
-  const idxStr = url.searchParams.get("i");
-  const idx = idxStr !== null ? Number(idxStr) : -1;
-  const generationId = url.searchParams.get("g") ?? "";
-
-  if (Number.isInteger(idx) && idx >= 0 && generationId) {
-    const cached = readRecipeCache(generationId, idx);
-    if (cached) {
-      return {
-        job: cached.job,
-        titlePromise: Promise.resolve(cached.title),
-        ingredientsPromise: Promise.resolve(cached.ingredients),
-        stepsPromise: Promise.resolve(cached.steps),
-      };
-    }
-  }
-
-  return serverLoader();
 }
 
 export default function CookRecipeRoute() {
