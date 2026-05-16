@@ -1,16 +1,29 @@
-import { useNavigate } from "@remix-run/react";
+import {
+  json,
+  redirect,
+  type ActionFunctionArgs,
+  type LoaderFunctionArgs,
+} from "@remix-run/node";
+import {
+  Form,
+  useActionData,
+  useLoaderData,
+  useNavigation,
+} from "@remix-run/react";
 import { AnimatePresence, motion } from "motion/react";
-import { useRef, useState } from "react";
-import { v4 as uuid } from "uuid";
+import { useEffect, useRef, useState } from "react";
 
 import { LoadingOverlay } from "~/components/LoadingOverlay";
 import { MealSuggestionCard } from "~/components/MealSuggestionCard";
 import { MustafoBubble } from "~/components/MustafoBubble";
-import { RecipeView } from "~/components/RecipeView";
 import { useToast } from "~/components/Toast";
-import { addDish } from "~/lib/dishes.client";
+import {
+  generateMealSuggestions,
+  type SuggestionsResult,
+} from "~/lib/ai.server";
 import { LOADING_MESSAGES, TALKING } from "~/lib/mustafo";
-import type { Dish, MealSuggestion, Recipe, UserProfile } from "~/types";
+import { consumeFlash, flash } from "~/lib/session.server";
+import type { MealSuggestion, UserProfile } from "~/types";
 import { useAppContext } from "./_app";
 
 const RECIPE_LOADING = [
@@ -20,119 +33,82 @@ const RECIPE_LOADING = [
   "Almost there, chef...",
 ] as const;
 
-type Stage = "chat" | "suggestions" | "recipe";
+type CookData = {
+  suggestions: MealSuggestion[];
+  submittedIngredients: string;
+};
+
+export async function loader({ request }: LoaderFunctionArgs) {
+  const { value, headers } = await consumeFlash<CookData>(request, "cookData");
+  return json(
+    {
+      suggestions: value?.suggestions ?? null,
+      submittedIngredients: value?.submittedIngredients ?? "",
+    },
+    { headers },
+  );
+}
+
+export async function action({ request }: ActionFunctionArgs) {
+  const form = await request.formData();
+  const ingredients = String(form.get("ingredients") ?? "").trim();
+  if (!ingredients) {
+    return json({ error: "Tell me what's in there." }, { status: 400 });
+  }
+  const result: SuggestionsResult = await generateMealSuggestions(ingredients);
+  if (result.kind === "no-food") {
+    return json({ error: result.message }, { status: 400 });
+  }
+  if (result.kind === "error") {
+    return json({ error: result.message }, { status: 500 });
+  }
+  const headers = await flash<CookData>(request, "cookData", {
+    suggestions: result.suggestions,
+    submittedIngredients: ingredients,
+  });
+  return redirect("/", { headers });
+}
+
+type Stage = "chat" | "suggestions";
 
 function CookInner({ profile }: { profile: UserProfile }) {
   const { notify } = useToast();
+  const loaderData = useLoaderData<typeof loader>();
+  const actionData = useActionData<typeof action>();
+  const navigation = useNavigation();
+
+  const suggestions = loaderData.suggestions;
+  const submittedIngredients = loaderData.submittedIngredients;
+
   const [ingredients, setIngredients] = useState("");
-  const [submittedIngredients, setSubmittedIngredients] = useState("");
-  const [stage, setStage] = useState<Stage>("chat");
-  const [suggestions, setSuggestions] = useState<MealSuggestion[]>([]);
-  const [selectedMeal, setSelectedMeal] = useState<MealSuggestion | null>(null);
-  const [recipe, setRecipe] = useState<Recipe | null>(null);
-  const [loadingMode, setLoadingMode] = useState<"none" | "meals" | "recipe">(
-    "none",
-  );
-  const [error, setError] = useState<string | null>(null);
   const resultsRef = useRef<HTMLDivElement | null>(null);
 
-  async function handleSubmit(e?: React.FormEvent) {
-    e?.preventDefault();
-    const value = ingredients.trim();
-    if (!value || loadingMode !== "none") return;
-    setError(null);
-    setSubmittedIngredients(value);
-    setLoadingMode("meals");
-    try {
-      const res = await fetch("/api/suggest-meals", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ ingredients: value }),
-      });
-      const data = (await res.json()) as
-        | { suggestions: MealSuggestion[] }
-        | { error: string };
-      if (!res.ok || "error" in data) {
-        throw new Error("error" in data ? data.error : "Something went sideways.");
-      }
-      setSuggestions(data.suggestions);
-      setStage("suggestions");
+  const isSuggesting =
+    navigation.state === "submitting" &&
+    navigation.formMethod === "POST" &&
+    navigation.formAction === "/";
+  const isFetchingRecipe =
+    navigation.state === "submitting" &&
+    navigation.formAction === "/cook/recipe";
+
+  const stage: Stage = suggestions && suggestions.length > 0 ? "suggestions" : "chat";
+
+  const errorMessage = actionData && "error" in actionData ? actionData.error : null;
+
+  useEffect(() => {
+    if (errorMessage) notify(errorMessage, "error");
+  }, [errorMessage, notify]);
+
+  useEffect(() => {
+    if (stage === "suggestions") {
       setTimeout(() => {
-        resultsRef.current?.scrollIntoView({ behavior: "smooth", block: "start" });
+        resultsRef.current?.scrollIntoView({
+          behavior: "smooth",
+          block: "start",
+        });
       }, 80);
-    } catch (err) {
-      const msg =
-        err instanceof Error
-          ? err.message
-          : "Mustafo's WiFi died. Try again in a sec?";
-      setError(msg);
-      notify(msg, "error");
-    } finally {
-      setLoadingMode("none");
     }
-  }
-
-  async function pickMeal(meal: MealSuggestion) {
-    if (loadingMode !== "none") return;
-    setError(null);
-    setSelectedMeal(meal);
-    setLoadingMode("recipe");
-    try {
-      const res = await fetch("/api/get-recipe", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          dishName: meal.name,
-          ingredients: submittedIngredients,
-        }),
-      });
-      const data = (await res.json()) as
-        | { recipe: Recipe }
-        | { error: string };
-      if (!res.ok || "error" in data) {
-        throw new Error("error" in data ? data.error : "Recipe didn't load.");
-      }
-      setRecipe(data.recipe);
-      setStage("recipe");
-      setTimeout(() => {
-        resultsRef.current?.scrollIntoView({ behavior: "smooth", block: "start" });
-      }, 80);
-    } catch (err) {
-      const msg =
-        err instanceof Error ? err.message : "Recipe didn't come through.";
-      setError(msg);
-      notify(msg, "error");
-    } finally {
-      setLoadingMode("none");
-    }
-  }
-
-  function makingIt() {
-    if (!selectedMeal || !recipe) return;
-    const dish: Dish = {
-      id: uuid(),
-      dishName: selectedMeal.name,
-      recipe,
-      originalIngredients: submittedIngredients,
-      mealImage: selectedMeal.imageUrl ?? null,
-      rating: 0,
-      createdAt: new Date().toISOString(),
-    };
-    addDish(dish);
-    notify(`Saved ${selectedMeal.name}. Go cook, chef!`, "success");
-    setTimeout(() => {
-      window.location.href = "/profile";
-    }, 700);
-  }
-
-  function tryElse() {
-    setRecipe(null);
-    setSelectedMeal(null);
-    setStage("suggestions");
-    setTimeout(() => {
-      resultsRef.current?.scrollIntoView({ behavior: "smooth", block: "start" });
-    }, 80);
-  }
+  }, [stage]);
 
   return (
     <>
@@ -162,8 +138,9 @@ function CookInner({ profile }: { profile: UserProfile }) {
         </section>
 
         {/* Ingredient form */}
-        <form
-          onSubmit={handleSubmit}
+        <Form
+          method="post"
+          action="/"
           className="card-base p-5 md:p-6 relative overflow-hidden"
         >
           <span className="absolute -top-10 -right-10 w-32 h-32 rounded-full bg-sunny/20 blur-2xl" />
@@ -173,6 +150,7 @@ function CookInner({ profile }: { profile: UserProfile }) {
             I got this in my fridge:
           </label>
           <textarea
+            name="ingredients"
             value={ingredients}
             onChange={(e) => setIngredients(e.target.value)}
             placeholder="chicken breast, garlic, pasta, half an onion, some questionable leftovers..."
@@ -181,7 +159,7 @@ function CookInner({ profile }: { profile: UserProfile }) {
             onKeyDown={(e) => {
               if (e.key === "Enter" && !e.shiftKey) {
                 e.preventDefault();
-                void handleSubmit();
+                e.currentTarget.form?.requestSubmit();
               }
             }}
           />
@@ -194,29 +172,29 @@ function CookInner({ profile }: { profile: UserProfile }) {
             </span>
             <button
               type="submit"
-              disabled={!ingredients.trim() || loadingMode !== "none"}
+              disabled={!ingredients.trim() || isSuggesting}
               className="btn-primary"
             >
               Find me something
               <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round"><path d="M5 12h14M13 5l7 7-7 7"/></svg>
             </button>
           </div>
-        </form>
+        </Form>
 
-        {error && (
+        {errorMessage && (
           <motion.p
             initial={{ opacity: 0, y: 8 }}
             animate={{ opacity: 1, y: 0 }}
             className="mt-4 text-coral text-sm font-body text-center"
           >
-            {error}
+            {errorMessage}
           </motion.p>
         )}
 
         {/* Results area */}
         <div ref={resultsRef} className="mt-10 md:mt-14">
           <AnimatePresence mode="wait">
-            {stage === "chat" && loadingMode === "none" && (
+            {stage === "chat" && !isSuggesting && (
               <motion.div
                 key="welcome"
                 initial={{ opacity: 0, y: 12 }}
@@ -236,7 +214,7 @@ function CookInner({ profile }: { profile: UserProfile }) {
               </motion.div>
             )}
 
-            {stage === "suggestions" && (
+            {stage === "suggestions" && suggestions && (
               <motion.div
                 key="suggestions"
                 initial={{ opacity: 0, y: 16 }}
@@ -259,26 +237,10 @@ function CookInner({ profile }: { profile: UserProfile }) {
                       key={m.name + i}
                       meal={m}
                       index={i}
-                      onSelect={() => pickMeal(m)}
+                      submittedIngredients={submittedIngredients}
                     />
                   ))}
                 </div>
-              </motion.div>
-            )}
-
-            {stage === "recipe" && selectedMeal && recipe && (
-              <motion.div
-                key="recipe"
-                initial={{ opacity: 0, y: 16 }}
-                animate={{ opacity: 1, y: 0 }}
-                exit={{ opacity: 0, y: -12 }}
-              >
-                <RecipeView
-                  meal={selectedMeal}
-                  recipe={recipe}
-                  onMakingIt={makingIt}
-                  onTryElse={tryElse}
-                />
               </motion.div>
             )}
           </AnimatePresence>
@@ -286,8 +248,8 @@ function CookInner({ profile }: { profile: UserProfile }) {
       </main>
 
       <LoadingOverlay
-        open={loadingMode !== "none"}
-        messages={loadingMode === "recipe" ? RECIPE_LOADING : LOADING_MESSAGES}
+        open={isSuggesting || isFetchingRecipe}
+        messages={isFetchingRecipe ? RECIPE_LOADING : LOADING_MESSAGES}
       />
     </>
   );
