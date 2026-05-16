@@ -141,8 +141,8 @@ export async function consumeFlash<T>(
 ): Promise<{ value: T | undefined; headers: Headers }> {
   const session = await getSession(request);
   const value = session.get(key) as T | undefined;
-  const cookie = await storage.commitSession(session);
+  const cookie = await commitSessionSafely(session);
   const headers = new Headers();
-  headers.append("Set-Cookie", cookie);
+  if (cookie) headers.append("Set-Cookie", cookie);
   return { value, headers };
 }
