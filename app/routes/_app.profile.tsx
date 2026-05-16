@@ -5,12 +5,7 @@ import { DishHistoryCard } from "~/components/DishHistoryCard";
 import { Modal } from "~/components/Modal";
 import { MustafoBubble } from "~/components/MustafoBubble";
 import { useToast } from "~/components/Toast";
-import {
-  clearDishes,
-  clearProfileImage,
-  getDishes,
-  updateDishRating,
-} from "~/lib/dishes.client";
+import { getDishes, updateDishRating } from "~/lib/dishes.client";
 import { EXPRESSIONS } from "~/lib/mustafo";
 import type { Dish, UserProfile } from "~/types";
 import { useAppContext } from "./_app";
@@ -35,13 +30,33 @@ function ProfileInner({
   }
 
   function handleDelete() {
-    clearDishes();
-    clearProfileImage();
+    // Wipe everything client-side: all localStorage keys, sessionStorage,
+    // and any non-httpOnly cookies for this origin.
+    try {
+      window.localStorage.clear();
+      window.sessionStorage.clear();
+    } catch {
+      // ignore — storage may be unavailable in private mode
+    }
+    try {
+      document.cookie.split(";").forEach((entry) => {
+        const eq = entry.indexOf("=");
+        const name = (eq > -1 ? entry.substring(0, eq) : entry).trim();
+        if (!name) return;
+        document.cookie = `${name}=; expires=Thu, 01 Jan 1970 00:00:00 GMT; path=/`;
+      });
+    } catch {
+      // ignore
+    }
+    // Server-side cookie clear (the session cookie is httpOnly so the client
+    // can't expire it directly).
     const body = new FormData();
     body.set("intent", "logout");
-    fetch("/onboarding", { method: "POST", body }).then(() => {
-      window.location.href = "/onboarding";
-    });
+    fetch("/onboarding", { method: "POST", body })
+      .catch(() => {})
+      .finally(() => {
+        window.location.href = "/onboarding";
+      });
   }
 
   const stats = {
