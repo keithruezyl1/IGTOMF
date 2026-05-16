@@ -50,7 +50,7 @@ export async function generateMealSuggestions(
 
     const raw = completion.choices[0]?.message?.content ?? "{}";
     const parsed = JSON.parse(raw) as {
-      suggestions?: Array<Omit<MealSuggestion, "imageUrl" | "description">>;
+      suggestions?: Array<Omit<MealSuggestion, "imageUrl">>;
       noFood?: boolean;
       message?: string;
     };
@@ -68,7 +68,6 @@ export async function generateMealSuggestions(
       name: String(s.name ?? "Mystery Meal"),
       emoji: String(s.emoji ?? "🍳"),
       why: String(s.why ?? ""),
-      description: String(s.why ?? ""),
       likelihood: Math.max(60, Math.min(99, Number(s.likelihood) || 85)),
     })) as MealSuggestion[];
 

@@ -29,7 +29,6 @@ export type Dish = {
 
 export type MealSuggestion = {
   name: string;
-  description: string;
   likelihood: number;
   why: string;
   emoji: string;
