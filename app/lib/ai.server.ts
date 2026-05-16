@@ -97,13 +97,14 @@ export async function generateMealSuggestions(
 
 // ---------- Recipe (streaming, three-step) ----------
 
-// Retries a call up to `attempts` times with exponential backoff. Used to
-// smooth over transient OpenAI failures (429 rate-limit, occasional timeouts,
-// malformed JSON). The steps generator is the most prone to this because it
-// runs last in the chain and gets the largest prompt.
+// Retries a call up to `attempts` times with exponential backoff. Smooths
+// over transient OpenAI failures (429, timeouts, malformed JSON). Steps are
+// the most prone to this because they run last in the chain with the largest
+// prompt; bumping defaults to 5 keeps the failure rate vanishingly small
+// before the deterministic fallback kicks in.
 async function withRetry<T>(
   fn: () => Promise<T>,
-  attempts: number = 3,
+  attempts: number = 5,
 ): Promise<T> {
   let lastErr: unknown;
   for (let i = 0; i < attempts; i++) {
@@ -112,12 +113,70 @@ async function withRetry<T>(
     } catch (err) {
       lastErr = err;
       if (i < attempts - 1) {
-        const delay = 400 * Math.pow(2, i); // 400ms, 800ms, 1600ms
+        // 400, 800, 1600, 3200, 6400 ms ceiling
+        const delay = 400 * Math.pow(2, i);
         await new Promise((resolve) => setTimeout(resolve, delay));
       }
     }
   }
   throw lastErr;
+}
+
+// ---------- Deterministic fallbacks ----------
+// These run only when withRetry exhausts every attempt. They guarantee the
+// user always sees a complete recipe, even if OpenAI is fully down.
+
+function fallbackTitle(dishName: string): RecipeTitle {
+  return {
+    title: dishName,
+    intro: "Here's your recipe. Let's make it happen.",
+  };
+}
+
+function fallbackIngredients(userIngredients: string): RecipeIngredients {
+  const parsed = userIngredients
+    .split(/[,\n]+/)
+    .map((s) => s.trim())
+    .filter(Boolean)
+    .slice(0, 12);
+  return {
+    ingredients: parsed.map((name) => ({
+      name,
+      quantity: "to taste",
+      unit: "",
+      isYouMightNeed: false,
+    })),
+  };
+}
+
+function fallbackSteps(
+  title: string,
+  ingredientList: RecipeIngredient[],
+): RecipeSteps {
+  const available = ingredientList
+    .filter((i) => !i.isYouMightNeed)
+    .map((i) => i.name);
+  const firstTwo = available.slice(0, 2).join(" and ");
+  const remaining = available.slice(2).join(", ");
+  const instructions: string[] = [
+    "Pull everything out and give yourself a clean workspace to cook in.",
+    "Wash and chop any fresh produce. Measure out the rest while you're at it.",
+    "Heat a pan or pot over medium heat with a splash of oil or a pat of butter.",
+    firstTwo
+      ? `Start with ${firstTwo}. Cook until they're aromatic or beginning to soften.`
+      : "Add your main ingredients to the pan and cook until they start to take color.",
+    remaining
+      ? `Add ${remaining} next. Stir to combine.`
+      : "Add the rest of your ingredients and stir to combine.",
+    "Cook for 6-10 minutes, stirring now and then, until everything is hot and the flavors come together.",
+    "Taste it. Add salt, pepper, or anything else it's asking for.",
+    `Plate it up. You just made ${title} with what you had.`,
+  ];
+  return {
+    instructions,
+    celebration:
+      "Look at you, cooking from chaos. That's chef energy. Enjoy it.",
+  };
 }
 
 const TITLE_PROMPT = (dish: string, ingredients: string) => `Recipe for: "${dish}"
@@ -136,24 +195,31 @@ export async function generateRecipeTitle(
   dishName: string,
   ingredients: string,
 ): Promise<RecipeTitle> {
-  return withRetry(async () => {
-    const client = getOpenAI();
-    const completion = await client.chat.completions.create({
-      model: "gpt-4o",
-      response_format: { type: "json_object" },
-      temperature: 0.7,
-      messages: [
-        { role: "system", content: MUSTAFO_SYSTEM_PROMPT },
-        { role: "user", content: TITLE_PROMPT(dishName, ingredients) },
-      ],
+  try {
+    return await withRetry(async () => {
+      const client = getOpenAI();
+      const completion = await client.chat.completions.create({
+        model: "gpt-4o",
+        response_format: { type: "json_object" },
+        temperature: 0.7,
+        messages: [
+          { role: "system", content: MUSTAFO_SYSTEM_PROMPT },
+          { role: "user", content: TITLE_PROMPT(dishName, ingredients) },
+        ],
+      });
+      const raw = completion.choices[0]?.message?.content ?? "{}";
+      const parsed = JSON.parse(raw) as Partial<RecipeTitle>;
+      const title = String(parsed.title ?? "").trim();
+      if (!title) throw new Error("title generator returned empty title");
+      return {
+        title,
+        intro: String(parsed.intro ?? "You got this. Let's go."),
+      };
     });
-    const raw = completion.choices[0]?.message?.content ?? "{}";
-    const parsed = JSON.parse(raw) as Partial<RecipeTitle>;
-    return {
-      title: String(parsed.title ?? dishName),
-      intro: String(parsed.intro ?? "You got this. Let's go."),
-    };
-  });
+  } catch (err) {
+    console.error("title generation exhausted retries; using fallback", err);
+    return fallbackTitle(dishName);
+  }
 }
 
 const INGREDIENTS_PROMPT = (
@@ -186,35 +252,45 @@ export async function generateRecipeIngredients(
   dishName: string,
   ingredients: string,
 ): Promise<RecipeIngredients> {
-  return withRetry(async () => {
-    const client = getOpenAI();
-    const completion = await client.chat.completions.create({
-      model: "gpt-4o",
-      response_format: { type: "json_object" },
-      temperature: 0.5,
-      messages: [
-        { role: "system", content: MUSTAFO_SYSTEM_PROMPT },
-        {
-          role: "user",
-          content: INGREDIENTS_PROMPT(title, dishName, ingredients),
-        },
-      ],
+  try {
+    return await withRetry(async () => {
+      const client = getOpenAI();
+      const completion = await client.chat.completions.create({
+        model: "gpt-4o",
+        response_format: { type: "json_object" },
+        temperature: 0.5,
+        messages: [
+          { role: "system", content: MUSTAFO_SYSTEM_PROMPT },
+          {
+            role: "user",
+            content: INGREDIENTS_PROMPT(title, dishName, ingredients),
+          },
+        ],
+      });
+      const raw = completion.choices[0]?.message?.content ?? "{}";
+      const parsed = JSON.parse(raw) as Partial<RecipeIngredients>;
+      const list = Array.isArray(parsed.ingredients)
+        ? parsed.ingredients
+            .map((i) => ({
+              name: String(i?.name ?? "").trim(),
+              quantity: String(i?.quantity ?? ""),
+              unit: String(i?.unit ?? ""),
+              isYouMightNeed: Boolean(i?.isYouMightNeed),
+            }))
+            .filter((i) => i.name.length > 0)
+        : [];
+      if (list.length === 0) {
+        throw new Error("ingredients generator returned empty list");
+      }
+      return { ingredients: list };
     });
-    const raw = completion.choices[0]?.message?.content ?? "{}";
-    const parsed = JSON.parse(raw) as Partial<RecipeIngredients>;
-    const list = Array.isArray(parsed.ingredients)
-      ? parsed.ingredients.map((i) => ({
-          name: String(i?.name ?? ""),
-          quantity: String(i?.quantity ?? ""),
-          unit: String(i?.unit ?? ""),
-          isYouMightNeed: Boolean(i?.isYouMightNeed),
-        }))
-      : [];
-    if (list.length === 0) {
-      throw new Error("ingredients generator returned empty list");
-    }
-    return { ingredients: list };
-  });
+  } catch (err) {
+    console.error(
+      "ingredients generation exhausted retries; using fallback",
+      err,
+    );
+    return fallbackIngredients(ingredients);
+  }
 }
 
 const STEPS_PROMPT = (
@@ -244,30 +320,35 @@ export async function generateRecipeSteps(
   title: string,
   ingredientList: RecipeIngredient[],
 ): Promise<RecipeSteps> {
-  return withRetry(async () => {
-    const client = getOpenAI();
-    const completion = await client.chat.completions.create({
-      model: "gpt-4o",
-      response_format: { type: "json_object" },
-      temperature: 0.7,
-      messages: [
-        { role: "system", content: MUSTAFO_SYSTEM_PROMPT },
-        { role: "user", content: STEPS_PROMPT(title, ingredientList) },
-      ],
+  try {
+    return await withRetry(async () => {
+      const client = getOpenAI();
+      const completion = await client.chat.completions.create({
+        model: "gpt-4o",
+        response_format: { type: "json_object" },
+        temperature: 0.7,
+        messages: [
+          { role: "system", content: MUSTAFO_SYSTEM_PROMPT },
+          { role: "user", content: STEPS_PROMPT(title, ingredientList) },
+        ],
+      });
+      const raw = completion.choices[0]?.message?.content ?? "{}";
+      const parsed = JSON.parse(raw) as Partial<RecipeSteps>;
+      const instructions = Array.isArray(parsed.instructions)
+        ? parsed.instructions.map(String).filter((s) => s.trim().length > 0)
+        : [];
+      if (instructions.length < 3) {
+        throw new Error("steps generator returned too few instructions");
+      }
+      return {
+        instructions,
+        celebration: String(
+          parsed.celebration ?? "You just made something delicious. Be proud.",
+        ),
+      };
     });
-    const raw = completion.choices[0]?.message?.content ?? "{}";
-    const parsed = JSON.parse(raw) as Partial<RecipeSteps>;
-    const instructions = Array.isArray(parsed.instructions)
-      ? parsed.instructions.map(String).filter((s) => s.length > 0)
-      : [];
-    if (instructions.length === 0) {
-      throw new Error("steps generator returned empty instructions");
-    }
-    return {
-      instructions,
-      celebration: String(
-        parsed.celebration ?? "You just made something delicious. Be proud.",
-      ),
-    };
-  });
+  } catch (err) {
+    console.error("steps generation exhausted retries; using fallback", err);
+    return fallbackSteps(title, ingredientList);
+  }
 }
