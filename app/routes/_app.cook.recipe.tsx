@@ -31,8 +31,6 @@ import { addDish } from "~/lib/dishes.client";
 import {
   commitSessionSafely,
   consumeFlash,
-  decodeCookState,
-  encodeCookState,
   getSession,
 } from "~/lib/session.server";
 import type { Dish, RecipeIngredient } from "~/types";
@@ -91,24 +89,10 @@ export async function action({ request }: ActionFunctionArgs) {
     return redirect("/");
   }
 
+  // No cookState mutation here. The cookie is write-once on the cook action;
+  // viewedIndices is derived client-side from sessionStorage so this action
+  // can't tip the cookie over the 4KB limit.
   const session = await getSession(request);
-  const encoded = session.get("cookState") as string | undefined;
-  const state = encoded ? decodeCookState(encoded) : null;
-
-  if (
-    state &&
-    Number.isInteger(index) &&
-    index >= 0 &&
-    !state.viewedIndices.includes(index)
-  ) {
-    session.set(
-      "cookState",
-      encodeCookState({
-        ...state,
-        viewedIndices: [...state.viewedIndices, index],
-      }),
-    );
-  }
 
   const job: RecipeJob = { dishName, ingredients, imageUrl, index };
   session.flash("recipeJob", job);
