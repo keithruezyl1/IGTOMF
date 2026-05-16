@@ -109,23 +109,51 @@ export async function action({ request }: ActionFunctionArgs) {
 }
 
 export async function loader({ request }: LoaderFunctionArgs) {
-  const { value: job, headers } = await consumeFlash<RecipeJob>(
-    request,
-    "recipeJob",
-  );
+  let job: RecipeJob | undefined;
+  let headers: Headers;
+  try {
+    const flashed = await consumeFlash<RecipeJob>(request, "recipeJob");
+    job = flashed.value;
+    headers = flashed.headers;
+  } catch (err) {
+    console.error("recipe loader: consumeFlash failed", err);
+    throw redirect("/");
+  }
   if (!job) throw redirect("/");
 
-  const titlePromise = generateRecipeTitle(job.dishName, job.ingredients);
+  // Capture for narrowing inside the .then closures.
+  const jobLocal = job;
+
+  // Each generation step is wrapped so a rejection propagates to its <Await>
+  // errorElement rather than throwing the whole loader.
+  const titlePromise = generateRecipeTitle(
+    jobLocal.dishName,
+    jobLocal.ingredients,
+  ).catch((err) => {
+    console.error("title generation failed", err);
+    throw err;
+  });
   const ingredientsPromise = titlePromise.then((t) =>
-    generateRecipeIngredients(t.title, job.dishName, job.ingredients),
+    generateRecipeIngredients(
+      t.title,
+      jobLocal.dishName,
+      jobLocal.ingredients,
+    ).catch((err) => {
+      console.error("ingredients generation failed", err);
+      throw err;
+    }),
   );
   const stepsPromise = Promise.all([titlePromise, ingredientsPromise]).then(
-    ([t, ing]) => generateRecipeSteps(t.title, ing.ingredients),
+    ([t, ing]) =>
+      generateRecipeSteps(t.title, ing.ingredients).catch((err) => {
+        console.error("steps generation failed", err);
+        throw err;
+      }),
   );
 
   return defer(
     {
-      job,
+      job: jobLocal,
       titlePromise,
       ingredientsPromise,
       stepsPromise,
