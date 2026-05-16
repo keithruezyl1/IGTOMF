@@ -107,13 +107,11 @@ function CookInner({ profile }: { profile: UserProfile }) {
     setIngredients(submittedIngredients);
   }, [submittedIngredients]);
 
-  const isSuggesting =
-    navigation.state === "submitting" &&
-    navigation.formMethod === "POST" &&
-    navigation.formAction === "/";
-  const isFetchingRecipe =
-    navigation.state === "submitting" &&
-    navigation.formAction === "/cook/recipe";
+  const isSubmittingPost =
+    navigation.state === "submitting" && navigation.formMethod === "POST";
+  const submittingDishName = navigation.formData?.get("dishName");
+  const isSuggesting = isSubmittingPost && !submittingDishName;
+  const isFetchingRecipe = isSubmittingPost && !!submittingDishName;
 
   const stage: Stage = suggestions && suggestions.length > 0 ? "suggestions" : "chat";
 
