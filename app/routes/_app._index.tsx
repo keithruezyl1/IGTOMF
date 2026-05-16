@@ -16,12 +16,11 @@ import { useEffect, useRef, useState } from "react";
 import { LoadingOverlay } from "~/components/LoadingOverlay";
 import { MealSuggestionCard } from "~/components/MealSuggestionCard";
 import { MustafoBubble } from "~/components/MustafoBubble";
-import { useToast } from "~/components/Toast";
 import {
   generateMealSuggestions,
   type SuggestionsResult,
 } from "~/lib/ai.server";
-import { LOADING_MESSAGES, TALKING } from "~/lib/mustafo";
+import { EXPRESSIONS, LOADING_MESSAGES, TALKING } from "~/lib/mustafo";
 import { consumeFlash, flash } from "~/lib/session.server";
 import type { MealSuggestion, UserProfile } from "~/types";
 import { useAppContext } from "./_app";
@@ -72,7 +71,6 @@ export async function action({ request }: ActionFunctionArgs) {
 type Stage = "chat" | "suggestions";
 
 function CookInner({ profile }: { profile: UserProfile }) {
-  const { notify } = useToast();
   const loaderData = useLoaderData<typeof loader>();
   const actionData = useActionData<typeof action>();
   const navigation = useNavigation();
@@ -81,6 +79,7 @@ function CookInner({ profile }: { profile: UserProfile }) {
   const submittedIngredients = loaderData.submittedIngredients;
 
   const [ingredients, setIngredients] = useState("");
+  const [errorDismissed, setErrorDismissed] = useState(false);
   const resultsRef = useRef<HTMLDivElement | null>(null);
 
   const isSuggesting =
@@ -96,8 +95,8 @@ function CookInner({ profile }: { profile: UserProfile }) {
   const errorMessage = actionData && "error" in actionData ? actionData.error : null;
 
   useEffect(() => {
-    if (errorMessage) notify(errorMessage, "error");
-  }, [errorMessage, notify]);
+    if (actionData) setErrorDismissed(false);
+  }, [actionData]);
 
   useEffect(() => {
     if (stage === "suggestions") {
@@ -180,16 +179,6 @@ function CookInner({ profile }: { profile: UserProfile }) {
           </div>
         </Form>
 
-        {errorMessage && (
-          <motion.p
-            initial={{ opacity: 0, y: 8 }}
-            animate={{ opacity: 1, y: 0 }}
-            className="mt-4 text-coral text-sm font-body text-center"
-          >
-            {errorMessage}
-          </motion.p>
-        )}
-
         {/* Results area */}
         <div ref={resultsRef} className="mt-10 md:mt-14">
           <AnimatePresence mode="wait">
@@ -250,7 +239,88 @@ function CookInner({ profile }: { profile: UserProfile }) {
         open={isSuggesting || isFetchingRecipe}
         messages={isFetchingRecipe ? RECIPE_LOADING : LOADING_MESSAGES}
       />
+
+      <NoFoodModal
+        open={!!errorMessage && !errorDismissed}
+        message={errorMessage ?? ""}
+        onClose={() => setErrorDismissed(true)}
+      />
     </>
+  );
+}
+
+function NoFoodModal({
+  open,
+  message,
+  onClose,
+}: {
+  open: boolean;
+  message: string;
+  onClose: () => void;
+}) {
+  useEffect(() => {
+    if (!open) return;
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === "Escape" || e.key === "Enter") onClose();
+    };
+    window.addEventListener("keydown", onKey);
+    document.body.style.overflow = "hidden";
+    return () => {
+      window.removeEventListener("keydown", onKey);
+      document.body.style.overflow = "";
+    };
+  }, [open, onClose]);
+
+  return (
+    <AnimatePresence>
+      {open && (
+        <motion.div
+          className="fixed inset-0 z-[110] flex items-center justify-center p-5 bg-black/35 backdrop-blur-md"
+          initial={{ opacity: 0 }}
+          animate={{ opacity: 1 }}
+          exit={{ opacity: 0 }}
+          onClick={onClose}
+          role="dialog"
+          aria-modal="true"
+          aria-labelledby="no-food-title"
+        >
+          <motion.div
+            className="relative bg-white rounded-[28px] shadow-modal w-full max-w-md p-7 md:p-9 text-center"
+            initial={{ opacity: 0, scale: 0.92, y: 24 }}
+            animate={{ opacity: 1, scale: 1, y: 0 }}
+            exit={{ opacity: 0, scale: 0.94, y: 12 }}
+            transition={{ type: "spring", stiffness: 280, damping: 22 }}
+            onClick={(e) => e.stopPropagation()}
+          >
+            <motion.img
+              src={EXPRESSIONS[5]}
+              alt="Mustafo sarcastic"
+              className="w-28 h-28 md:w-32 md:h-32 mx-auto mb-4 object-contain drop-shadow-[0_8px_20px_rgba(0,0,0,0.12)]"
+              initial={{ y: -20, rotate: -8, opacity: 0 }}
+              animate={{ y: 0, rotate: 0, opacity: 1 }}
+              transition={{ type: "spring", stiffness: 240, damping: 18 }}
+            />
+            <h2
+              id="no-food-title"
+              className="font-display font-bold text-2xl md:text-3xl text-ink mb-2 leading-tight"
+            >
+              That's not food, chef.
+            </h2>
+            <p className="font-body text-sm md:text-base text-muted leading-relaxed mb-6">
+              {message}
+            </p>
+            <button
+              type="button"
+              onClick={onClose}
+              autoFocus
+              className="btn-primary w-full"
+            >
+              Got it
+            </button>
+          </motion.div>
+        </motion.div>
+      )}
+    </AnimatePresence>
   );
 }
 
