@@ -17,7 +17,13 @@ export async function searchUnsplashImage(query: string): Promise<string | null>
       results?: Array<{ urls?: { regular?: string; small?: string } }>;
     };
     const hit = data.results?.[0];
-    return hit?.urls?.regular ?? hit?.urls?.small ?? null;
+    const raw = hit?.urls?.regular ?? hit?.urls?.small ?? null;
+    if (!raw) return null;
+    // Unsplash URLs carry ~150 chars of tracking params we don't need. Strip
+    // them and re-apply minimal sizing so the URL stays under ~100 chars and
+    // doesn't bloat the cookie when stored in cookState.suggestions.
+    const base = raw.split("?")[0];
+    return `${base}?w=400&q=70&fm=jpg`;
   } catch {
     return null;
   }
