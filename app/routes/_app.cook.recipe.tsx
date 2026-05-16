@@ -1,11 +1,17 @@
 import {
   defer,
+  json,
   redirect,
   type ActionFunctionArgs,
   type LoaderFunctionArgs,
 } from "@remix-run/node";
-import { Await, useLoaderData, useNavigate } from "@remix-run/react";
-import { Suspense, useEffect, useMemo, useRef } from "react";
+import {
+  Await,
+  useFetcher,
+  useLoaderData,
+  useNavigate,
+} from "@remix-run/react";
+import { Suspense, useEffect, useMemo, useRef, useState } from "react";
 import { v4 as uuid } from "uuid";
 
 import {
@@ -72,6 +78,32 @@ function writeRecipeCache(
 
 export async function action({ request }: ActionFunctionArgs) {
   const form = await request.formData();
+  const intent = String(form.get("intent") ?? "view");
+
+  if (intent === "refresh-steps") {
+    const dishName = String(form.get("dishName") ?? "").trim();
+    const userIngredients = String(form.get("ingredients") ?? "").trim();
+    if (!dishName || !userIngredients) {
+      return json({ error: "Missing context" }, { status: 400 });
+    }
+    // Parse the user's raw ingredients string into a minimal list. We avoid a
+    // separate ingredients-regeneration call so this refresh stays a single
+    // OpenAI request.
+    const ingredientList: RecipeIngredient[] = userIngredients
+      .split(/[,\n]+/)
+      .map((s) => s.trim())
+      .filter(Boolean)
+      .slice(0, 12)
+      .map((name) => ({
+        name,
+        quantity: "",
+        unit: "",
+        isYouMightNeed: false,
+      }));
+    const steps = await generateRecipeSteps(dishName, ingredientList);
+    return json(steps);
+  }
+
   const dishName = String(form.get("dishName") ?? "").trim();
   const ingredients = String(form.get("ingredients") ?? "").trim();
   const imageUrl = String(form.get("imageUrl") ?? "");
@@ -241,34 +273,11 @@ export default function CookRecipeRoute() {
           <h2 className="font-display font-bold text-lg mb-3 text-ink">
             Steps
           </h2>
-          <Suspense fallback={<StepsSkeleton />}>
-            <Await
-              resolve={stepsPromise}
-              errorElement={
-                <ErrorBlock message="Steps didn't load. Try again?" />
-              }
-            >
-              {(s: RecipeSteps) => (
-                <>
-                  <ol className="flex flex-col gap-2.5">
-                    {s.instructions.map((step, idx) => (
-                      <li key={idx} className="flex gap-3">
-                        <span className="flex-shrink-0 w-7 h-7 rounded-full bg-fresh text-white font-display font-bold text-xs grid place-items-center">
-                          {idx + 1}
-                        </span>
-                        <p className="font-body text-sm text-ink leading-relaxed pt-0.5">
-                          {step}
-                        </p>
-                      </li>
-                    ))}
-                  </ol>
-                  <p className="font-body text-sm text-ink italic mt-6">
-                    {s.celebration}
-                  </p>
-                </>
-              )}
-            </Await>
-          </Suspense>
+          <StepsSection
+            stepsPromise={stepsPromise}
+            dishName={job.dishName}
+            userIngredients={job.ingredients}
+          />
         </section>
 
         <Suspense fallback={null}>
@@ -362,6 +371,122 @@ function RecipeFooter(props: {
       </button>
       <button type="button" onClick={makingIt} className="btn-primary flex-1">
         I'm making it
+      </button>
+    </div>
+  );
+}
+
+function StepsList({ steps }: { steps: RecipeSteps }) {
+  return (
+    <>
+      <ol className="flex flex-col gap-2.5">
+        {steps.instructions.map((step, idx) => (
+          <li key={idx} className="flex gap-3">
+            <span className="flex-shrink-0 w-7 h-7 rounded-full bg-fresh text-white font-display font-bold text-xs grid place-items-center">
+              {idx + 1}
+            </span>
+            <p className="font-body text-sm text-ink leading-relaxed pt-0.5">
+              {step}
+            </p>
+          </li>
+        ))}
+      </ol>
+      <p className="font-body text-sm text-ink italic mt-6">
+        {steps.celebration}
+      </p>
+    </>
+  );
+}
+
+function StepsSection({
+  stepsPromise,
+  dishName,
+  userIngredients,
+}: {
+  stepsPromise: Promise<RecipeSteps>;
+  dishName: string;
+  userIngredients: string;
+}) {
+  return (
+    <Suspense fallback={<StepsSkeleton />}>
+      <Await
+        resolve={stepsPromise}
+        errorElement={
+          <StepsErrorBlock
+            dishName={dishName}
+            userIngredients={userIngredients}
+          />
+        }
+      >
+        {(s: RecipeSteps) => <StepsList steps={s} />}
+      </Await>
+    </Suspense>
+  );
+}
+
+function StepsErrorBlock({
+  dishName,
+  userIngredients,
+}: {
+  dishName: string;
+  userIngredients: string;
+}) {
+  const fetcher = useFetcher<RecipeSteps | { error: string }>();
+  const [recovered, setRecovered] = useState<RecipeSteps | null>(null);
+
+  useEffect(() => {
+    if (fetcher.data && "instructions" in fetcher.data) {
+      setRecovered(fetcher.data);
+    }
+  }, [fetcher.data]);
+
+  function refresh() {
+    const fd = new FormData();
+    fd.set("intent", "refresh-steps");
+    fd.set("dishName", dishName);
+    fd.set("ingredients", userIngredients);
+    fetcher.submit(fd, { method: "post", action: "/cook/recipe" });
+  }
+
+  if (recovered) {
+    return <StepsList steps={recovered} />;
+  }
+
+  const loading = fetcher.state !== "idle";
+
+  return (
+    <div className="font-body text-sm text-coral border border-coral/30 bg-coral/5 rounded-xl p-3 flex items-center justify-between gap-3">
+      <span>Steps didn't load. Try again?</span>
+      <button
+        type="button"
+        onClick={refresh}
+        disabled={loading}
+        aria-label={loading ? "Refreshing steps" : "Refresh steps"}
+        className="flex-shrink-0 w-8 h-8 rounded-full grid place-items-center text-coral hover:bg-coral/10 disabled:opacity-50 disabled:cursor-wait transition-colors"
+      >
+        <svg
+          width="16"
+          height="16"
+          viewBox="0 0 24 24"
+          fill="none"
+          stroke="currentColor"
+          strokeWidth="2.5"
+          strokeLinecap="round"
+          strokeLinejoin="round"
+          className={loading ? "animate-spin" : ""}
+          aria-hidden
+        >
+          {loading ? (
+            <path d="M21 12a9 9 0 1 1-6.219-8.56" />
+          ) : (
+            <>
+              <path d="M3 12a9 9 0 0 1 15-6.7L21 8" />
+              <path d="M21 3v5h-5" />
+              <path d="M21 12a9 9 0 0 1-15 6.7L3 16" />
+              <path d="M3 21v-5h5" />
+            </>
+          )}
+        </svg>
       </button>
     </div>
   );
