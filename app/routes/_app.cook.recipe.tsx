@@ -4,12 +4,7 @@ import {
   type ActionFunctionArgs,
   type LoaderFunctionArgs,
 } from "@remix-run/node";
-import {
-  Await,
-  useLoaderData,
-  useNavigate,
-  type ClientLoaderFunctionArgs,
-} from "@remix-run/react";
+import { Await, useLoaderData, useNavigate } from "@remix-run/react";
 import { Suspense, useEffect, useMemo, useRef } from "react";
 import { v4 as uuid } from "uuid";
 
@@ -57,29 +52,6 @@ const RECIPE_TTL_MS = 30 * 60 * 1000;
 
 function sessionCacheKey(generationId: string, index: number): string {
   return `recipe_cache_${generationId}_${index}`;
-}
-
-function readRecipeCache(
-  generationId: string,
-  index: number,
-): CachedEntry | null {
-  if (typeof window === "undefined" || !generationId) return null;
-  try {
-    const key = sessionCacheKey(generationId, index);
-    const raw = window.sessionStorage.getItem(key);
-    if (!raw) return null;
-    const entry = JSON.parse(raw) as CachedEntry;
-    if (
-      typeof entry.expiresAt !== "number" ||
-      entry.expiresAt < Date.now()
-    ) {
-      window.sessionStorage.removeItem(key);
-      return null;
-    }
-    return entry;
-  } catch {
-    return null;
-  }
 }
 
 function writeRecipeCache(
@@ -188,30 +160,6 @@ export async function loader({ request }: LoaderFunctionArgs) {
     },
     { headers },
   );
-}
-
-export async function clientLoader({
-  request,
-  serverLoader,
-}: ClientLoaderFunctionArgs) {
-  const url = new URL(request.url);
-  const idxStr = url.searchParams.get("i");
-  const idx = idxStr !== null ? Number(idxStr) : -1;
-  const generationId = url.searchParams.get("g") ?? "";
-
-  if (Number.isInteger(idx) && idx >= 0 && generationId) {
-    const cached = readRecipeCache(generationId, idx);
-    if (cached) {
-      return {
-        job: cached.job,
-        titlePromise: Promise.resolve(cached.title),
-        ingredientsPromise: Promise.resolve(cached.ingredients),
-        stepsPromise: Promise.resolve(cached.steps),
-      };
-    }
-  }
-
-  return serverLoader();
 }
 
 export default function CookRecipeRoute() {
