@@ -1,21 +1,18 @@
-import { useNavigate } from "@remix-run/react";
 import { motion } from "motion/react";
 import { useEffect, useState } from "react";
 
 import { DishHistoryCard } from "~/components/DishHistoryCard";
 import { Modal } from "~/components/Modal";
 import { MustafoBubble } from "~/components/MustafoBubble";
-import { NavBar } from "~/components/NavBar";
-import { StarRating } from "~/components/StarRating";
-import { ToastProvider, useToast } from "~/components/Toast";
-import { EXPRESSIONS } from "~/lib/mustafo";
+import { useToast } from "~/components/Toast";
 import {
-  clearAll,
+  clearDishes,
   getDishes,
-  getProfile,
   updateDishRating,
-} from "~/lib/storage";
+} from "~/lib/dishes.client";
+import { EXPRESSIONS } from "~/lib/mustafo";
 import type { Dish, UserProfile } from "~/types";
+import { useAppContext } from "./_app";
 
 function ProfileInner({
   profile,
@@ -26,7 +23,6 @@ function ProfileInner({
 }) {
   const { notify } = useToast();
   const [dishes, setDishes] = useState<Dish[]>(initialDishes);
-  const [openDish, setOpenDish] = useState<Dish | null>(null);
   const [confirmDelete, setConfirmDelete] = useState(false);
 
   function handleRate(id: string, rating: number) {
@@ -36,8 +32,12 @@ function ProfileInner({
   }
 
   function handleDelete() {
-    clearAll();
-    window.location.href = "/onboarding";
+    clearDishes();
+    const body = new FormData();
+    body.set("intent", "logout");
+    fetch("/onboarding", { method: "POST", body }).then(() => {
+      window.location.href = "/onboarding";
+    });
   }
 
   const stats = {
@@ -56,8 +56,6 @@ function ProfileInner({
 
   return (
     <>
-      <NavBar username={profile.username} profileImage={profile.profileImage} />
-
       <main className="max-w-5xl mx-auto px-4 md:px-8 pt-6 pb-24">
         {/* Header */}
         <section className="card-base p-6 md:p-8 mb-8 relative overflow-hidden">
@@ -153,7 +151,7 @@ function ProfileInner({
                   key={d.id}
                   dish={d}
                   onRate={(r) => handleRate(d.id, r)}
-                  onOpen={() => setOpenDish(d)}
+                  to={`/recipe/${d.id}`}
                 />
               ))}
             </div>
@@ -194,71 +192,6 @@ function ProfileInner({
         </div>
       </div>
 
-      {/* Recipe detail modal */}
-      <Modal
-        open={!!openDish}
-        onClose={() => setOpenDish(null)}
-        title={openDish?.dishName}
-        size="lg"
-      >
-        {openDish && (
-          <div className="space-y-6">
-            {openDish.mealImage && (
-              <img
-                src={openDish.mealImage}
-                alt={openDish.dishName}
-                className="w-full h-48 md:h-56 object-cover rounded-[16px]"
-              />
-            )}
-            <p className="font-body text-sm text-muted italic">
-              Originally from: "{openDish.originalIngredients}"
-            </p>
-            <div>
-              <StarRating
-                value={openDish.rating}
-                onChange={(r) => {
-                  handleRate(openDish.id, r);
-                  setOpenDish({ ...openDish, rating: r });
-                }}
-                size={24}
-              />
-            </div>
-            <div>
-              <h3 className="font-display font-bold text-lg mb-2 text-ink">
-                Ingredients
-              </h3>
-              <ul className="flex flex-col gap-1">
-                {openDish.recipe.ingredients.map((i, idx) => (
-                  <li key={idx} className="font-body text-sm text-ink">
-                    <span className={i.isYouMightNeed ? "italic text-muted" : ""}>
-                      {i.quantity} {i.unit} {i.name}
-                      {i.isYouMightNeed && " (might need)"}
-                    </span>
-                  </li>
-                ))}
-              </ul>
-            </div>
-            <div>
-              <h3 className="font-display font-bold text-lg mb-2 text-ink">
-                Steps
-              </h3>
-              <ol className="flex flex-col gap-2.5">
-                {openDish.recipe.instructions.map((s, idx) => (
-                  <li key={idx} className="flex gap-3">
-                    <span className="flex-shrink-0 w-7 h-7 rounded-full bg-fresh text-white font-display font-bold text-xs grid place-items-center">
-                      {idx + 1}
-                    </span>
-                    <p className="font-body text-sm text-ink leading-relaxed pt-0.5">
-                      {s}
-                    </p>
-                  </li>
-                ))}
-              </ol>
-            </div>
-          </div>
-        )}
-      </Modal>
-
       {/* Delete confirmation modal */}
       <Modal
         open={confirmDelete}
@@ -288,24 +221,13 @@ function ProfileInner({
 }
 
 export default function ProfileRoute() {
-  const navigate = useNavigate();
-  const [profile, setProfile] = useState<UserProfile | null>(null);
+  const { profile } = useAppContext();
   const [dishes, setDishes] = useState<Dish[] | null>(null);
 
   useEffect(() => {
-    const p = getProfile();
-    if (!p) {
-      navigate("/onboarding", { replace: true });
-      return;
-    }
-    setProfile(p);
     setDishes(getDishes());
-  }, [navigate]);
+  }, []);
 
-  if (!profile || !dishes) return null;
-  return (
-    <ToastProvider>
-      <ProfileInner profile={profile} initialDishes={dishes} />
-    </ToastProvider>
-  );
+  if (!dishes) return null;
+  return <ProfileInner profile={profile} initialDishes={dishes} />;
 }

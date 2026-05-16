@@ -1,22 +1,8 @@
-import type { Dish, UserProfile } from "~/types";
+import type { Dish } from "~/types";
 
-const PROFILE_KEY = "igotthis_profile";
 const DISHES_KEY = "igotthis_dishes";
 
-export function getProfile(): UserProfile | null {
-  if (typeof window === "undefined") return null;
-  try {
-    const raw = window.localStorage.getItem(PROFILE_KEY);
-    return raw ? (JSON.parse(raw) as UserProfile) : null;
-  } catch {
-    return null;
-  }
-}
-
-export function setProfile(profile: UserProfile) {
-  if (typeof window === "undefined") return;
-  window.localStorage.setItem(PROFILE_KEY, JSON.stringify(profile));
-}
+export const LEGACY_PROFILE_KEY = "igotthis_profile";
 
 export function getDishes(): Dish[] {
   if (typeof window === "undefined") return [];
@@ -44,8 +30,7 @@ export function updateDishRating(id: string, rating: number) {
   setDishes(dishes);
 }
 
-export function clearAll() {
+export function clearDishes() {
   if (typeof window === "undefined") return;
-  window.localStorage.removeItem(PROFILE_KEY);
   window.localStorage.removeItem(DISHES_KEY);
 }
