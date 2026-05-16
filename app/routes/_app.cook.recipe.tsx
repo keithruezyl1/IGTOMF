@@ -10,7 +10,7 @@ import {
   useNavigate,
   type ClientLoaderFunctionArgs,
 } from "@remix-run/react";
-import { Suspense, useEffect, useRef } from "react";
+import { Suspense, useEffect, useMemo, useRef } from "react";
 import { v4 as uuid } from "uuid";
 
 import {
@@ -29,11 +29,11 @@ import {
 } from "~/lib/ai.server";
 import { addDish } from "~/lib/dishes.client";
 import {
+  commitSessionSafely,
   consumeFlash,
   decodeCookState,
   encodeCookState,
   getSession,
-  storage,
 } from "~/lib/session.server";
 import type { Dish, RecipeIngredient } from "~/types";
 
@@ -112,13 +112,16 @@ export async function action({ request }: ActionFunctionArgs) {
 
   const job: RecipeJob = { dishName, ingredients, imageUrl, index };
   session.flash("recipeJob", job);
-  const cookie = await storage.commitSession(session);
+  const cookie = await commitSessionSafely(session);
   // Put the index in the URL so clientLoader can short-circuit to sessionStorage.
   const target =
     Number.isInteger(index) && index >= 0
       ? `/cook/recipe?i=${index}`
       : "/cook/recipe";
-  return redirect(target, { headers: { "Set-Cookie": cookie } });
+  return redirect(
+    target,
+    cookie ? { headers: { "Set-Cookie": cookie } } : undefined,
+  );
 }
 
 export async function loader({ request }: LoaderFunctionArgs) {
@@ -175,6 +178,13 @@ export default function CookRecipeRoute() {
     useLoaderData<typeof loader>();
   const navigate = useNavigate();
   const { notify } = useToast();
+
+  // Stabilize the combined promise so React's Suspense reconciler doesn't see
+  // a fresh Promise.all on every render (which can cause hydration mismatches).
+  const allReadyPromise = useMemo(
+    () => Promise.all([titlePromise, ingredientsPromise, stepsPromise]),
+    [titlePromise, ingredientsPromise, stepsPromise],
+  );
 
   function tryElse() {
     navigate("/");
@@ -273,13 +283,7 @@ export default function CookRecipeRoute() {
         </section>
 
         <Suspense fallback={null}>
-          <Await
-            resolve={Promise.all([
-              titlePromise,
-              ingredientsPromise,
-              stepsPromise,
-            ])}
-          >
+          <Await resolve={allReadyPromise}>
             {([t, ing, s]: [RecipeTitle, RecipeIngredients, RecipeSteps]) => (
               <RecipeFooter
                 job={job}

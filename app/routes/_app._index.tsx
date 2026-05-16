@@ -30,10 +30,10 @@ import {
   TALKING,
 } from "~/lib/mustafo";
 import {
+  commitSessionSafely,
   decodeCookState,
   encodeCookState,
   getSession,
-  storage,
 } from "~/lib/session.server";
 import type { UserProfile } from "~/types";
 import { useAppContext } from "./_app";
@@ -71,7 +71,7 @@ export async function loader({ request }: LoaderFunctionArgs) {
     state.viewedIndices.length >= state.suggestions.length
   ) {
     session.unset("cookState");
-    const cookie = await storage.commitSession(session);
+    const cookie = await commitSessionSafely(session);
     return json(
       {
         suggestions: null,
@@ -79,7 +79,7 @@ export async function loader({ request }: LoaderFunctionArgs) {
         viewedIndices: [] as number[],
         copy,
       },
-      { headers: { "Set-Cookie": cookie } },
+      cookie ? { headers: { "Set-Cookie": cookie } } : undefined,
     );
   }
 
@@ -113,8 +113,8 @@ export async function action({ request }: ActionFunctionArgs) {
       viewedIndices: [],
     }),
   );
-  const cookie = await storage.commitSession(session);
-  return redirect("/", { headers: { "Set-Cookie": cookie } });
+  const cookie = await commitSessionSafely(session);
+  return redirect("/", cookie ? { headers: { "Set-Cookie": cookie } } : undefined);
 }
 
 type Stage = "chat" | "suggestions";

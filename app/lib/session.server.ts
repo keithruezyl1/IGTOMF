@@ -61,6 +61,34 @@ export async function getSession(request: Request) {
   return storage.getSession(request.headers.get("Cookie"));
 }
 
+/**
+ * Commits a session safely. If the resulting cookie exceeds the safe browser
+ * limit (~4KB) or commitSession throws, drops `cookState` and retries. As a
+ * last resort returns null so the caller can skip setting the cookie.
+ *
+ * This prevents Vercel from 500-ing on oversized Set-Cookie responses.
+ */
+export async function commitSessionSafely(
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  session: any,
+): Promise<string | null> {
+  const SAFE_LIMIT = 3800;
+  try {
+    const cookie = await storage.commitSession(session);
+    if (cookie.length <= SAFE_LIMIT) return cookie;
+  } catch {
+    // fall through to retry without cookState
+  }
+  try {
+    session.unset("cookState");
+    const cookie = await storage.commitSession(session);
+    if (cookie.length <= SAFE_LIMIT) return cookie;
+  } catch {
+    // fall through
+  }
+  return null;
+}
+
 export async function getProfile(
   request: Request,
 ): Promise<UserProfile | null> {
