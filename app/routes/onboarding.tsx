@@ -195,7 +195,7 @@ function Step1(props: {
         type="text"
         value={props.username}
         onChange={(e) => props.setUsername(e.target.value)}
-        placeholder="your name"
+        placeholder="Albert, Chef, or FridgeMaster3000"
         className="input-base"
         autoFocus
       />
