@@ -1,15 +1,9 @@
 import {
   json,
-  redirect,
   type ActionFunctionArgs,
   type LoaderFunctionArgs,
 } from "@remix-run/node";
-import {
-  Form,
-  useActionData,
-  useLoaderData,
-  useNavigation,
-} from "@remix-run/react";
+import { useFetcher, useLoaderData } from "@remix-run/react";
 import { AnimatePresence, motion } from "motion/react";
 import { useEffect, useRef, useState } from "react";
 
@@ -17,7 +11,9 @@ import { LoadingOverlay } from "~/components/LoadingOverlay";
 import { MealSuggestionCard } from "~/components/MealSuggestionCard";
 import { MustafoBubble } from "~/components/MustafoBubble";
 import {
+  generateFullRecipe,
   generateMealSuggestions,
+  type FullRecipe,
   type SuggestionsResult,
 } from "~/lib/ai.server";
 import {
@@ -85,29 +81,52 @@ export async function action({ request }: ActionFunctionArgs) {
   if (result.kind === "error") {
     return json({ error: result.message }, { status: 500 });
   }
+
+  const generationId = String(Date.now());
+  // Generate all 3 full recipes in parallel. Each generator already has 5
+  // retries + a deterministic fallback, so this is guaranteed to resolve
+  // with content for every suggestion.
+  const recipes: FullRecipe[] = await Promise.all(
+    result.suggestions.map((s) => generateFullRecipe(s.name, ingredients)),
+  );
+
   const session = await getSession(request);
   session.set(
     "cookState",
     encodeCookState({
       suggestions: result.suggestions,
       submittedIngredients: ingredients,
-      generationId: String(Date.now()),
+      generationId,
     }),
   );
   const cookie = await commitSessionSafely(session);
-  return redirect("/", cookie ? { headers: { "Set-Cookie": cookie } } : undefined);
+
+  return json(
+    {
+      suggestions: result.suggestions,
+      submittedIngredients: ingredients,
+      generationId,
+      recipes,
+    },
+    cookie ? { headers: { "Set-Cookie": cookie } } : undefined,
+  );
 }
 
 type Stage = "chat" | "suggestions";
 
 function CookInner({ profile }: { profile: UserProfile }) {
   const loaderData = useLoaderData<typeof loader>();
-  const actionData = useActionData<typeof action>();
-  const navigation = useNavigation();
+  const fetcher = useFetcher<typeof action>();
 
-  const suggestions = loaderData.suggestions;
-  const submittedIngredients = loaderData.submittedIngredients;
-  const generationId = loaderData.generationId;
+  // Prefer fetcher data (fresh submission) over loader data (refresh-restored
+  // state). When the user submits ingredients, fetcher.data fires first with
+  // the full payload including recipes, which we stash in sessionStorage.
+  const fetcherOk =
+    fetcher.data && "suggestions" in fetcher.data ? fetcher.data : null;
+  const suggestions = fetcherOk?.suggestions ?? loaderData.suggestions;
+  const submittedIngredients =
+    fetcherOk?.submittedIngredients ?? loaderData.submittedIngredients;
+  const generationId = fetcherOk?.generationId ?? loaderData.generationId;
 
   const [ingredients, setIngredients] = useState(submittedIngredients);
   const [errorDismissed, setErrorDismissed] = useState(false);
@@ -117,6 +136,40 @@ function CookInner({ profile }: { profile: UserProfile }) {
   useEffect(() => {
     setIngredients(submittedIngredients);
   }, [submittedIngredients]);
+
+  // Pre-warm sessionStorage with all 3 recipes the moment the fetcher returns.
+  // This is what makes clicking a meal card instant — by the time the user
+  // navigates to /cook/recipe?i=X&g=GENID, the recipe is already on disk.
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+    if (!fetcherOk || !("recipes" in fetcherOk) || !fetcherOk.recipes) return;
+    const ttl = Date.now() + 30 * 60 * 1000;
+    fetcherOk.recipes.forEach((recipe, i) => {
+      const suggestion = fetcherOk.suggestions[i];
+      if (!suggestion) return;
+      const entry = {
+        job: {
+          dishName: suggestion.name,
+          ingredients: fetcherOk.submittedIngredients,
+          imageUrl: suggestion.imageUrl ?? "",
+          index: i,
+          generationId: fetcherOk.generationId,
+        },
+        title: recipe.title,
+        ingredients: recipe.ingredients,
+        steps: recipe.steps,
+        expiresAt: ttl,
+      };
+      try {
+        window.sessionStorage.setItem(
+          `recipe_cache_${fetcherOk.generationId}_${i}`,
+          JSON.stringify(entry),
+        );
+      } catch {
+        // ignore — sessionStorage unavailable
+      }
+    });
+  }, [fetcherOk]);
 
   // Derive viewedIndices client-side: a suggestion is "viewed" if its recipe
   // is cached AND not expired in sessionStorage for THIS generation. Scoping
@@ -144,19 +197,18 @@ function CookInner({ profile }: { profile: UserProfile }) {
     setViewedIndices(indices);
   }, [suggestions, generationId]);
 
-  const isSubmittingPost =
-    navigation.state === "submitting" && navigation.formMethod === "POST";
-  const submittingDishName = navigation.formData?.get("dishName");
-  const isSuggesting = isSubmittingPost && !submittingDishName;
-  const isFetchingRecipe = isSubmittingPost && !!submittingDishName;
+  // The cook fetcher is in-flight whenever fetcher.state !== "idle".
+  const isSuggesting = fetcher.state !== "idle";
+  const isFetchingRecipe = false; // meal-card clicks are plain navigations now
 
   const stage: Stage = suggestions && suggestions.length > 0 ? "suggestions" : "chat";
 
-  const errorMessage = actionData && "error" in actionData ? actionData.error : null;
+  const errorMessage =
+    fetcher.data && "error" in fetcher.data ? fetcher.data.error : null;
 
   useEffect(() => {
-    if (actionData) setErrorDismissed(false);
-  }, [actionData]);
+    if (fetcher.data) setErrorDismissed(false);
+  }, [fetcher.data]);
 
   useEffect(() => {
     if (stage === "suggestions") {
@@ -201,7 +253,7 @@ function CookInner({ profile }: { profile: UserProfile }) {
         </section>
 
         {/* Ingredient form */}
-        <Form
+        <fetcher.Form
           method="post"
           className="card-base p-5 md:p-6 relative overflow-hidden"
         >
@@ -266,7 +318,7 @@ function CookInner({ profile }: { profile: UserProfile }) {
               )}
             </button>
           </div>
-        </Form>
+        </fetcher.Form>
 
         {/* Results area */}
         <div ref={resultsRef} className="mt-10 md:mt-14">
