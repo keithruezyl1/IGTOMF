@@ -316,6 +316,31 @@ Rules:
 
 export type RecipeSteps = { instructions: string[]; celebration: string };
 
+export type FullRecipe = {
+  title: RecipeTitle;
+  ingredients: RecipeIngredients;
+  steps: RecipeSteps;
+};
+
+/**
+ * Generates the complete recipe (title -> ingredients -> steps) for one
+ * suggestion. Used by the cook action to pre-warm all 3 recipes at submit
+ * time so meal-card clicks render instantly from sessionStorage.
+ */
+export async function generateFullRecipe(
+  dishName: string,
+  ingredients: string,
+): Promise<FullRecipe> {
+  const title = await generateRecipeTitle(dishName, ingredients);
+  const ing = await generateRecipeIngredients(
+    title.title,
+    dishName,
+    ingredients,
+  );
+  const steps = await generateRecipeSteps(title.title, ing.ingredients);
+  return { title, ingredients: ing, steps };
+}
+
 export async function generateRecipeSteps(
   title: string,
   ingredientList: RecipeIngredient[],
