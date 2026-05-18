@@ -20,7 +20,7 @@ import {
   type RecipeSteps,
   type RecipeTitle,
 } from "~/lib/ai.server";
-import { addDish } from "~/lib/dishes.client";
+import { addDish, markRecipeViewed } from "~/lib/dishes.client";
 import {
   commitSessionSafely,
   consumeFlash,
@@ -168,6 +168,10 @@ export default function CookRecipeRoute() {
   const [entry, setEntry] = useState<CachedEntry | null | undefined>(undefined);
 
   useEffect(() => {
+    // Mark this recipe as viewed regardless of cache-hit vs regenerate path
+    // — the user landed on the page, that's what "viewed" means.
+    markRecipeViewed(job.generationId, job.index);
+
     const cached = readRecipeCache(job.generationId, job.index);
     if (cached) {
       setEntry(cached);

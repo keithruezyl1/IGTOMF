@@ -4,6 +4,8 @@ import {
   type LoaderFunctionArgs,
 } from "@remix-run/node";
 import { useFetcher, useLoaderData } from "@remix-run/react";
+
+import { getViewedIndices } from "~/lib/dishes.client";
 import { AnimatePresence, motion } from "motion/react";
 import { useEffect, useRef, useState } from "react";
 
@@ -172,29 +174,12 @@ function CookInner({ profile }: { profile: UserProfile }) {
   }, [fetcherOk]);
 
   // Derive viewedIndices client-side: a suggestion is "viewed" if its recipe
-  // is cached AND not expired in sessionStorage for THIS generation. Scoping
-  // by generationId prevents stale recipes from a previous submission from
-  // polluting the current run.
+  // is in the viewed-indices list for this generation. The list is written
+  // to by the /cook/recipe page when the user actually navigates to a recipe
+  // — so "viewed" reflects user intent, not pre-generation cache presence.
   useEffect(() => {
     if (typeof window === "undefined" || !suggestions || !generationId) return;
-    const indices: number[] = [];
-    const now = Date.now();
-    for (let i = 0; i < suggestions.length; i++) {
-      const key = `recipe_cache_${generationId}_${i}`;
-      const raw = window.sessionStorage.getItem(key);
-      if (!raw) continue;
-      try {
-        const entry = JSON.parse(raw) as { expiresAt?: number };
-        if (typeof entry.expiresAt === "number" && entry.expiresAt > now) {
-          indices.push(i);
-        } else {
-          window.sessionStorage.removeItem(key);
-        }
-      } catch {
-        window.sessionStorage.removeItem(key);
-      }
-    }
-    setViewedIndices(indices);
+    setViewedIndices(getViewedIndices(generationId));
   }, [suggestions, generationId]);
 
   // The cook fetcher is in-flight whenever fetcher.state !== "idle".
